@@ -11,18 +11,67 @@ function appendLog(message) {
     logs.scrollTop = logs.scrollHeight;
 }
 
-async function workspaceApi(url, payload = {}) {
+async function workspaceApi(url, payload = {}, method = 'POST') {
     appendLog(`API запрос: ${url}`);
 
     const response = await fetch(url, {
-        method: 'POST',
+        method,
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify(payload)
+        body: method === 'GET' ? undefined : JSON.stringify(payload)
     });
 
     return await response.json();
+}
+
+async function loadProjects() {
+    const container = document.getElementById('projectsList');
+
+    if (!container) {
+        return;
+    }
+
+    appendLog('Загрузка списка проектов');
+
+    const data = await workspaceApi('/api/projects/list', {}, 'GET');
+
+    const projects = data.projects || [];
+
+    if (projects.length === 0) {
+        container.innerHTML = 'Проекты отсутствуют';
+        return;
+    }
+
+    container.innerHTML = projects.map(project => `
+        <div style="padding:10px;margin-bottom:10px;background:#1d2430;border-radius:10px;cursor:pointer" onclick="openProject('${project.workspace}')">
+            <strong>${project.name}</strong><br>
+            <small>${project.stack || 'unknown stack'}</small>
+        </div>
+    `).join('');
+}
+
+function openProject(workspace) {
+    document.getElementById('workspacePath').value = workspace;
+
+    appendLog(`Открытие проекта: ${workspace}`);
+
+    loadWorkspaceTree();
+}
+
+async function registerCurrentProject(repoUrl, workspace, stack = 'unknown') {
+    const name = repoUrl.split('/').pop();
+
+    await workspaceApi('/api/projects/register', {
+        name,
+        repo_url: repoUrl,
+        workspace,
+        stack
+    });
+
+    appendLog(`Проект зарегистрирован: ${name}`);
+
+    loadProjects();
 }
 
 async function loadWorkspaceTree() {
@@ -123,5 +172,6 @@ async function loadDevices() {
 
 window.addEventListener('load', () => {
     loadDevices();
+    loadProjects();
     appendLog('DevConsole workspace runtime готов');
 });
