@@ -11,72 +11,72 @@
     <aside class="sidebar">
         <div class="logo">
             <h1>DevConsole</h1>
-            <span>Pulse Development Environment</span>
+            <span>AI-среда разработки</span>
         </div>
 
         <nav>
-            <a href="#workspace">Workspace</a>
-            <a href="#android">Android Devices</a>
-            <a href="#build">Build & Install</a>
-            <a href="#prompts">AI Assistant</a>
-            <a href="#settings">Settings</a>
+            <a href="#workspace">Проекты</a>
+            <a href="#android">Android устройства</a>
+            <a href="#build">Сборка и установка</a>
+            <a href="#prompts">AI помощник</a>
+            <a href="#settings">Настройки</a>
         </nav>
     </aside>
 
     <main class="content">
         <section class="card" id="workspace">
-            <h2>Pulse Workspace</h2>
+            <h2>Рабочее пространство проекта</h2>
 
-            <input type="text" id="repoUrl" placeholder="https://github.com/viktor138irk/Pulse">
+            <input type="text" id="repoUrl" placeholder="Ссылка GitHub репозитория">
 
             <div class="button-row">
-                <button onclick="analyzeProject()">Analyze Project</button>
-                <button onclick="installDependencies()">Install Dependencies</button>
+                <button onclick="analyzeProject()">Анализ проекта</button>
+                <button onclick="installDependencies()">Установить зависимости</button>
             </div>
 
             <pre id="projectResult"></pre>
         </section>
 
         <section class="card" id="android">
-            <h2>Android Device Manager</h2>
+            <h2>Менеджер Android устройств</h2>
 
             <div class="button-row">
-                <button onclick="loadDevices()">Refresh Devices</button>
+                <button onclick="loadDevices()">Обновить список устройств</button>
             </div>
 
             <div id="devices"></div>
         </section>
 
         <section class="card" id="build">
-            <h2>APK Build & Install</h2>
+            <h2>Сборка и установка APK</h2>
 
-            <input type="text" id="workspacePath" placeholder="/var/lib/devconsole/projects/viktor138irk-Pulse">
+            <input type="text" id="workspacePath" placeholder="Путь рабочего пространства проекта">
 
             <div class="button-row">
-                <button onclick="buildApk()">Build APK</button>
-                <button onclick="installApk()">Install APK</button>
+                <button onclick="buildApk()">Собрать APK</button>
+                <button onclick="installApk()">Установить APK</button>
             </div>
 
             <pre id="buildResult"></pre>
         </section>
 
         <section class="card" id="prompts">
-            <h2>AI Assistant</h2>
+            <h2>AI помощник</h2>
 
-            <textarea id="promptInput" placeholder="Explain Flutter error or generate code..."></textarea>
+            <textarea id="promptInput" placeholder="Опиши ошибку, задачу или генерацию кода..."></textarea>
 
-            <button onclick="runPrompt()">Run AI Task</button>
+            <button onclick="runPrompt()">Запустить AI задачу</button>
 
             <pre id="promptResult"></pre>
         </section>
 
         <section class="card" id="settings">
-            <h2>OpenAI Settings</h2>
+            <h2>Настройки OpenAI</h2>
 
             <input type="password" id="apiKey" placeholder="OpenAI API Key">
-            <input type="text" id="model" value="gpt-5" placeholder="Model">
+            <input type="text" id="model" value="gpt-5" placeholder="Модель">
 
-            <button onclick="saveSettings()">Save Settings</button>
+            <button onclick="saveSettings()">Сохранить настройки</button>
 
             <div id="settingsResult"></div>
         </section>
@@ -94,7 +94,7 @@ async function api(url, options = {}) {
 async function analyzeProject() {
     const repo_url = document.getElementById('repoUrl').value;
 
-    document.getElementById('projectResult').innerText = 'Analyzing repository...';
+    document.getElementById('projectResult').innerText = 'Анализ проекта...';
 
     const data = await api('/api/projects/analyze', {
         method: 'POST',
@@ -112,7 +112,7 @@ async function analyzeProject() {
 async function installDependencies() {
     const repo_url = document.getElementById('repoUrl').value;
 
-    document.getElementById('projectResult').innerText = 'Installing dependencies...';
+    document.getElementById('projectResult').innerText = 'Установка зависимостей...';
 
     const data = await api('/api/projects/install-dependencies', {
         method: 'POST',
@@ -137,12 +137,12 @@ async function loadDevices() {
         return `
             <div class="status-item ${selectedDevice === id ? 'active-device' : ''}">
                 <strong>${id}</strong>
-                <button onclick="selectDevice('${id}')">Select</button>
+                <button onclick="selectDevice('${id}')">Выбрать</button>
             </div>
         `;
     }).join('');
 
-    document.getElementById('devices').innerHTML = html || '<p>No devices connected</p>';
+    document.getElementById('devices').innerHTML = html || '<p>Устройства не подключены</p>';
 }
 
 function selectDevice(id) {
@@ -153,7 +153,7 @@ function selectDevice(id) {
 async function buildApk() {
     const workspace = document.getElementById('workspacePath').value;
 
-    document.getElementById('buildResult').innerText = 'Building APK...';
+    document.getElementById('buildResult').innerText = 'Сборка APK...';
 
     const data = await api('/api/android/build', {
         method: 'POST',
@@ -167,7 +167,7 @@ async function buildApk() {
 async function installApk() {
     const workspace = document.getElementById('workspacePath').value;
 
-    document.getElementById('buildResult').innerText = 'Installing APK...';
+    document.getElementById('buildResult').innerText = 'Установка APK...';
 
     const data = await api('/api/android/install-latest', {
         method: 'POST',
@@ -194,7 +194,7 @@ async function saveSettings() {
 async function runPrompt() {
     const prompt = document.getElementById('promptInput').value;
 
-    document.getElementById('promptResult').innerText = 'Running AI task...';
+    document.getElementById('promptResult').innerText = 'Выполнение AI задачи...';
 
     const data = await api('/api/prompts/test', {
         method: 'POST',
