@@ -14,6 +14,22 @@ def list_devices() -> dict:
     return result
 
 
+def _parse_adb_line_metadata(parts: list[str]) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+
+    for part in parts[2:]:
+        if ':' not in part:
+            continue
+        key, value = part.split(':', 1)
+        metadata[key.strip()] = value.strip()
+
+    return metadata
+
+
+def _pretty_token(value: str) -> str:
+    return value.replace('_', ' ').replace('-', ' ').strip()
+
+
 def parse_devices(stdout: str) -> list[dict]:
     devices: list[dict] = []
 
@@ -28,6 +44,7 @@ def parse_devices(stdout: str) -> list[dict]:
 
         serial = parts[0]
         state = parts[1]
+        adb_meta = _parse_adb_line_metadata(parts)
 
         if state != 'device':
             devices.append({
@@ -39,13 +56,22 @@ def parse_devices(stdout: str) -> list[dict]:
             continue
 
         props = get_device_props(serial)
-        brand = props.get('brand') or ''
-        model = props.get('model') or ''
-        device = props.get('device') or ''
+        brand = props.get('brand') or adb_meta.get('product') or ''
+        model = props.get('model') or adb_meta.get('model') or ''
+        device = props.get('device') or adb_meta.get('device') or ''
         android = props.get('android') or ''
         sdk = props.get('sdk') or ''
 
-        title = ' '.join(part for part in [brand, model] if part).strip() or serial
+        title_parts = []
+        if brand:
+            title_parts.append(_pretty_token(brand).title())
+        if model and model.lower() != brand.lower():
+            title_parts.append(_pretty_token(model))
+        if not title_parts and device:
+            title_parts.append(_pretty_token(device))
+
+        title = ' '.join(title_parts).strip() or serial
+
         subtitle_parts = []
         if android:
             subtitle_parts.append(f'Android {android}')
@@ -53,6 +79,8 @@ def parse_devices(stdout: str) -> list[dict]:
             subtitle_parts.append(f'SDK {sdk}')
         if device:
             subtitle_parts.append(device)
+        if adb_meta.get('transport_id'):
+            subtitle_parts.append(f"transport {adb_meta['transport_id']}")
         subtitle_parts.append(serial)
 
         devices.append({
@@ -63,6 +91,7 @@ def parse_devices(stdout: str) -> list[dict]:
             'device': device,
             'android': android,
             'sdk': sdk,
+            'adb_meta': adb_meta,
             'title': title,
             'subtitle': ' · '.join(subtitle_parts),
         })
