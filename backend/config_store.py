@@ -55,3 +55,49 @@ def get_openai_key() -> Optional[str]:
 
 def get_openai_model() -> str:
     return get_setting('OPENAI_MODEL') or os.getenv('OPENAI_MODEL') or 'gpt-5'
+
+
+def get_proxy_config() -> dict:
+    return {
+        'enabled': (get_setting('PROXY_ENABLED') or os.getenv('PROXY_ENABLED') or '0') == '1',
+        'host': get_setting('PROXY_HOST') or os.getenv('PROXY_HOST') or '',
+        'port': get_setting('PROXY_PORT') or os.getenv('PROXY_PORT') or '',
+        'username': get_setting('PROXY_USERNAME') or os.getenv('PROXY_USERNAME') or '',
+        'password': get_setting('PROXY_PASSWORD') or os.getenv('PROXY_PASSWORD') or '',
+    }
+
+
+def get_proxy_public_config() -> dict:
+    proxy = get_proxy_config()
+    return {
+        'enabled': proxy['enabled'],
+        'host': proxy['host'],
+        'port': proxy['port'],
+        'username': proxy['username'],
+        'password_set': bool(proxy['password']),
+    }
+
+
+def build_proxy_url() -> Optional[str]:
+    proxy = get_proxy_config()
+
+    if not proxy['enabled']:
+        return None
+
+    host = proxy['host'].strip()
+    port = str(proxy['port']).strip()
+
+    if not host or not port:
+        return None
+
+    username = proxy['username'].strip()
+    password = proxy['password']
+
+    auth = ''
+    if username:
+        auth = username
+        if password:
+            auth += f':{password}'
+        auth += '@'
+
+    return f'socks5://{auth}{host}:{port}'
