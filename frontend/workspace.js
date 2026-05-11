@@ -1,4 +1,19 @@
+function appendLog(message) {
+    const logs = document.getElementById('logs');
+
+    if (!logs) {
+        return;
+    }
+
+    const time = new Date().toLocaleTimeString();
+
+    logs.innerText += `\n[${time}] ${message}`;
+    logs.scrollTop = logs.scrollHeight;
+}
+
 async function workspaceApi(url, payload = {}) {
+    appendLog(`API запрос: ${url}`);
+
     const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -12,6 +27,8 @@ async function workspaceApi(url, payload = {}) {
 
 async function loadWorkspaceTree() {
     const workspace = document.getElementById('workspacePath').value;
+
+    appendLog(`Загрузка workspace: ${workspace}`);
 
     const data = await workspaceApi('/api/files/tree', {
         path: workspace
@@ -47,6 +64,8 @@ function renderTree(tree, level = 0) {
 }
 
 async function openFile(path) {
+    appendLog(`Открытие файла: ${path}`);
+
     const data = await workspaceApi('/api/files/read', {
         path
     });
@@ -59,12 +78,50 @@ async function saveCurrentFile() {
     const path = document.getElementById('editorPath').innerText;
     const content = document.getElementById('editor').value;
 
+    appendLog(`Сохранение файла: ${path}`);
+
     const data = await workspaceApi('/api/files/save', {
         path,
         content
     });
 
-    document.getElementById('editorStatus').innerText = data.success
-        ? 'Файл сохранен'
-        : 'Ошибка сохранения';
+    appendLog(data.success ? 'Файл успешно сохранен' : 'Ошибка сохранения файла');
 }
+
+async function loadDevices() {
+    appendLog('Обновление списка Android устройств');
+
+    const data = await workspaceApi('/api/android/devices');
+
+    const container = document.getElementById('devices');
+
+    if (!container) {
+        return;
+    }
+
+    const lines = (data.stdout || '').split('\n');
+
+    const devices = lines.filter(line =>
+        line.includes('device') && !line.includes('List')
+    );
+
+    if (devices.length === 0) {
+        container.innerHTML = 'Устройства не подключены';
+        return;
+    }
+
+    container.innerHTML = devices.map(device => {
+        const id = device.split(/\s+/)[0];
+
+        return `
+            <div style="margin-bottom:8px;padding:8px;background:#1d2430;border-radius:8px;">
+                📱 ${id}
+            </div>
+        `;
+    }).join('');
+}
+
+window.addEventListener('load', () => {
+    loadDevices();
+    appendLog('DevConsole workspace runtime готов');
+});
