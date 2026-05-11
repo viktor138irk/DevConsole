@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from backend.android_tools import build_android, find_apks, install_latest_apk, list_devices
 from backend.config_store import (
     get_openai_model,
     has_openai_key,
@@ -13,6 +14,7 @@ from backend.config_store import (
 )
 from backend.openai_client import OpenAIConfigurationError, ask_ai
 from backend.project_analyzer import analyze_github_project
+from backend.shell_runner import run_command
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT_DIR / 'frontend'
@@ -43,6 +45,10 @@ class PromptTestRequest(BaseModel):
 
 class ProjectAnalyzeRequest(BaseModel):
     repo_url: str
+
+
+class WorkspaceRequest(BaseModel):
+    workspace: str
 
 
 @app.get('/')
@@ -151,4 +157,59 @@ async def analyze_project(payload: ProjectAnalyzeRequest):
     return {
         'success': True,
         'analysis': analysis.to_dict(),
+    }
+
+
+@app.post('/api/projects/install-dependencies')
+async def install_dependencies(payload: ProjectAnalyzeRequest):
+    try:
+        analysis = analyze_github_project(payload.repo_url.strip())
+        outputs = []
+        for step in analysis.dependency_steps:
+            outputs.append(run_command(step.command, step.cwd, 1800))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        'success': True,
+        'analysis': analysis.to_dict(),
+        'outputs': outputs,
+    }
+
+
+@app.post('/api/android/devices')
+async def android_devices():
+    try:
+        result = list_devices()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return result
+
+
+@app.post('/api/android/build')
+async def android_build(payload: WorkspaceRequest):
+    try:
+        result = build_android(payload.workspace)
+        apks = find_apks(payload.workspace)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        'success': result['returncode'] == 0,
+        'result': result,
+        'apks': apks,
+    }
+
+
+@app.post('/api/android/install-latest')
+async def android_install_latest(payload: WorkspaceRequest):
+    try:
+        result = install_latest_apk(payload.workspace)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        'success': result['returncode'] == 0,
+        'result': result,
     }
