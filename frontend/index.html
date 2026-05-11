@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevConsole</title>
+    <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="logo">
+            <h1>DevConsole</h1>
+            <span>AI Development Runtime</span>
+        </div>
+
+        <nav>
+            <a href="#dashboard">Dashboard</a>
+            <a href="#prompts">Prompt Lab</a>
+            <a href="#settings">AI Settings</a>
+            <a href="#tests">Connection Tests</a>
+        </nav>
+    </aside>
+
+    <main class="content">
+        <section class="card" id="dashboard">
+            <h2>System Status</h2>
+            <div id="systemStatus">Loading...</div>
+        </section>
+
+        <section class="card" id="prompts">
+            <h2>Prompt Sandbox</h2>
+            <textarea id="promptInput" placeholder="Напиши промт для теста AI..."></textarea>
+            <button onclick="runPrompt()">Run Prompt</button>
+            <pre id="promptResult"></pre>
+        </section>
+
+        <section class="card" id="settings">
+            <h2>OpenAI Settings</h2>
+            <input type="password" id="apiKey" placeholder="OpenAI API Key">
+            <input type="text" id="model" value="gpt-5" placeholder="Model">
+            <button onclick="saveSettings()">Save Settings</button>
+            <div id="settingsResult"></div>
+        </section>
+
+        <section class="card" id="tests">
+            <h2>Connection Tests</h2>
+            <button onclick="testConnection()">Test OpenAI Connection</button>
+            <pre id="testResult"></pre>
+        </section>
+    </main>
+</div>
+
+<script>
+async function loadStatus() {
+    const response = await fetch('/api/system/status');
+    const data = await response.json();
+
+    document.getElementById('systemStatus').innerHTML = `
+        <div class="status-grid">
+            <div class="status-item">
+                <span>Project</span>
+                <strong>${data.project}</strong>
+            </div>
+            <div class="status-item">
+                <span>Version</span>
+                <strong>${data.version}</strong>
+            </div>
+            <div class="status-item">
+                <span>OpenAI</span>
+                <strong>${data.openai_configured ? 'Configured' : 'Not configured'}</strong>
+            </div>
+            <div class="status-item">
+                <span>Model</span>
+                <strong>${data.openai_model}</strong>
+            </div>
+        </div>
+    `;
+}
+
+async function saveSettings() {
+    const api_key = document.getElementById('apiKey').value;
+    const model = document.getElementById('model').value;
+
+    const response = await fetch('/api/settings/openai', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ api_key, model })
+    });
+
+    const data = await response.json();
+
+    document.getElementById('settingsResult').innerText = data.message || data.detail;
+
+    loadStatus();
+}
+
+async function runPrompt() {
+    const prompt = document.getElementById('promptInput').value;
+
+    document.getElementById('promptResult').innerText = 'Running...';
+
+    const response = await fetch('/api/prompts/test', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ prompt })
+    });
+
+    const data = await response.json();
+
+    document.getElementById('promptResult').innerText = data.answer || data.detail;
+}
+
+async function testConnection() {
+    document.getElementById('testResult').innerText = 'Testing...';
+
+    const response = await fetch('/api/settings/openai/test', {
+        method: 'POST'
+    });
+
+    const data = await response.json();
+
+    document.getElementById('testResult').innerText = data.answer || data.detail;
+}
+
+loadStatus();
+</script>
+</body>
+</html>
