@@ -25,18 +25,56 @@ require_root() {
   fi
 }
 
+install_docker() {
+  info "Устанавливаю Docker"
+
+  if command -v docker >/dev/null 2>&1; then
+    warn "Docker уже установлен"
+  else
+    apt-get install -y ca-certificates curl gnupg lsb-release
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+
+    UBUNTU_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME:-jammy}")"
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+
+    if apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
+      info "Docker установлен из официального репозитория"
+    else
+      warn "Официальный репозиторий Docker не сработал, ставлю docker.io из Ubuntu repo"
+      rm -f /etc/apt/sources.list.d/docker.list
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
+    fi
+  fi
+
+  if ! docker compose version >/dev/null 2>&1; then
+    warn "Docker Compose plugin недоступен, ставлю standalone docker-compose"
+    COMPOSE_VERSION="v2.27.0"
+    mkdir -p /usr/local/lib/docker/cli-plugins
+    curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" -o /usr/local/lib/docker/cli-plugins/docker-compose
+    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+    ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+  fi
+
+  systemctl enable docker || true
+  systemctl restart docker || true
+}
+
 install_packages() {
   info "Устанавливаю системные пакеты"
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    ca-certificates curl git unzip zip rsync jq lsof \
+    ca-certificates curl git unzip zip rsync jq lsof gnupg lsb-release \
     build-essential pkg-config \
     python3 python3-venv python3-pip \
     sqlite3 \
-    docker.io docker-compose-plugin \
     adb fastboot \
     openjdk-17-jdk \
     udev
+
+  install_docker
 }
 
 create_user_and_dirs() {
