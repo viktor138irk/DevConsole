@@ -7,47 +7,58 @@
 <style>
 body{margin:0;background:#0f1115;color:#fff;font-family:Arial,sans-serif}
 .layout{display:flex;height:100vh}
-.sidebar{width:260px;background:#171a21;padding:20px;border-right:1px solid #2a2f3a;overflow:auto}
-.workspace{flex:1;display:flex;flex-direction:column}
-.topbar{padding:10px;background:#171a21;border-bottom:1px solid #2a2f3a;display:flex;gap:10px}
-.workspace-body{flex:1;display:flex;overflow:hidden}
-.file-tree{width:320px;background:#13161c;border-right:1px solid #2a2f3a;overflow:auto;padding:10px}
-.editor-panel{flex:1;display:flex;flex-direction:column}
-.editor-header{padding:10px;background:#171a21;border-bottom:1px solid #2a2f3a;display:flex;justify-content:space-between}
+.sidebar{width:320px;background:#171a21;padding:20px;border-right:1px solid #2a2f3a;overflow:auto;display:flex;flex-direction:column;gap:16px}
+.workspace{flex:1;display:flex;flex-direction:column}.topbar{padding:10px;background:#171a21;border-bottom:1px solid #2a2f3a;display:flex;gap:10px}
+.workspace-body{flex:1;display:flex;overflow:hidden}.file-tree{width:320px;background:#13161c;border-right:1px solid #2a2f3a;overflow:auto;padding:10px}.editor-panel{flex:1;display:flex;flex-direction:column}
+.editor-header{padding:10px;background:#171a21;border-bottom:1px solid #2a2f3a;display:flex;justify-content:space-between;align-items:center}
 textarea{flex:1;background:#0f1115;color:#fff;border:none;padding:16px;font-family:monospace;font-size:14px;outline:none;resize:none}
 button{background:#2563eb;color:#fff;border:none;padding:10px 14px;border-radius:8px;cursor:pointer}
-input{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px;border-radius:8px;flex:1}
-.tree-node{padding:6px;border-radius:6px;cursor:pointer}.tree-node:hover{background:#1d2430}.logs{height:180px;background:#0b0d11;border-top:1px solid #2a2f3a;padding:10px;overflow:auto;font-family:monospace;font-size:12px}
+button:hover{background:#3b82f6}
+input{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px;border-radius:8px;flex:1}.tree-node{padding:6px;border-radius:6px;cursor:pointer}.tree-node:hover{background:#1d2430}
+.logs{height:180px;background:#0b0d11;border-top:1px solid #2a2f3a;padding:10px;overflow:auto;font-family:monospace;font-size:12px}
+.section{background:#13161c;border:1px solid #2a2f3a;border-radius:12px;padding:14px}.section h3{margin-top:0}.projects-list{max-height:260px;overflow:auto}
 </style>
 </head>
 <body>
 <div class="layout">
 <aside class="sidebar">
+<div>
 <h2>DevConsole</h2>
-<p>AI IDE</p>
-<h3>Проекты</h3>
-<input type="text" id="repoUrl" placeholder="GitHub репозиторий">
+<p>AI Development IDE</p>
+</div>
+<div class="section">
+<h3>Импорт проекта</h3>
+<input type="text" id="repoUrl" placeholder="https://github.com/user/project">
 <div style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
 <button onclick="analyzeProject()">Анализ проекта</button>
 <button onclick="installDependencies()">Установить зависимости</button>
 <button onclick="loadWorkspaceTree()">Открыть workspace</button>
 <button onclick="buildApk()">Собрать APK</button>
 </div>
-<hr style="margin:20px 0;border-color:#2a2f3a">
+</div>
+<div class="section">
+<h3>Проекты</h3>
+<div id="projectsList" class="projects-list">Загрузка проектов...</div>
+</div>
+<div class="section">
 <h3>Android устройства</h3>
-<div id="devices">Нет устройств</div>
+<div id="devices">Поиск устройств...</div>
+</div>
 </aside>
 <div class="workspace">
 <div class="topbar">
 <input type="text" id="workspacePath" placeholder="Путь workspace">
-<button onclick="loadWorkspaceTree()">Обновить</button>
+<button onclick="loadWorkspaceTree()">Обновить workspace</button>
 </div>
 <div class="workspace-body">
 <div class="file-tree" id="fileTree"></div>
 <div class="editor-panel">
 <div class="editor-header">
 <div id="editorPath">Файл не открыт</div>
-<button onclick="saveCurrentFile()">Сохранить</button>
+<div style="display:flex;gap:10px;align-items:center">
+<div id="editorStatus"></div>
+<button onclick="saveCurrentFile()">Сохранить файл</button>
+</div>
 </div>
 <textarea id="editor"></textarea>
 <div class="logs" id="logs">DevConsole runtime initialized...</div>
@@ -57,9 +68,8 @@ input{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px;border
 </div>
 <script src="/workspace.js"></script>
 <script>
-let selectedDevice='';
 async function api(url,payload={}){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});return await r.json();}
-async function analyzeProject(){const repo_url=document.getElementById('repoUrl').value;const data=await api('/api/projects/analyze',{repo_url});if(data.analysis?.workspace){document.getElementById('workspacePath').value=data.analysis.workspace;}document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
+async function analyzeProject(){const repo_url=document.getElementById('repoUrl').value;const data=await api('/api/projects/analyze',{repo_url});if(data.analysis?.workspace){document.getElementById('workspacePath').value=data.analysis.workspace;await registerCurrentProject(repo_url,data.analysis.workspace,data.analysis.stack||'unknown');}document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
 async function installDependencies(){const repo_url=document.getElementById('repoUrl').value;const data=await api('/api/projects/install-dependencies',{repo_url});document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
 async function buildApk(){const workspace=document.getElementById('workspacePath').value;const data=await api('/api/android/build',{workspace});document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
 </script>
