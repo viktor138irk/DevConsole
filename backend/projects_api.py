@@ -1,7 +1,12 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.projects_registry import load_projects, save_project
+from backend.projects_registry import (
+    find_project_by_workspace,
+    load_projects,
+    save_project,
+    update_project_settings,
+)
 
 router = APIRouter(prefix='/api/projects', tags=['projects'])
 
@@ -11,6 +16,11 @@ class ProjectRegistryRequest(BaseModel):
     repo_url: str
     workspace: str
     stack: str | None = None
+
+
+class ProjectSettingsRequest(BaseModel):
+    workspace: str
+    settings: dict
 
 
 @router.get('/list')
@@ -33,4 +43,28 @@ async def register_project(payload: ProjectRegistryRequest):
     return {
         'success': True,
         'projects': projects,
+    }
+
+
+@router.get('/settings')
+async def project_settings(workspace: str):
+    project = find_project_by_workspace(workspace)
+    if not project:
+        raise HTTPException(status_code=404, detail='Project not found')
+
+    return {
+        'success': True,
+        'project': project,
+    }
+
+
+@router.post('/settings')
+async def save_project_settings(payload: ProjectSettingsRequest):
+    project = update_project_settings(payload.workspace, payload.settings)
+    if not project:
+        raise HTTPException(status_code=404, detail='Project not found')
+
+    return {
+        'success': True,
+        'project': project,
     }
