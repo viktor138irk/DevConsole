@@ -3,12 +3,34 @@ let collectedErrors = [];
 let selectedDeviceSerial = null;
 
 function appendLog(message) {
+    const systemLog = document.getElementById('systemLog');
+    const time = new Date().toLocaleTimeString();
+    const line = `[${time}] ${message}`;
+    if (systemLog) {
+        systemLog.innerText += systemLog.innerText ? `\n${line}` : line;
+        requestAnimationFrame(() => { systemLog.scrollTop = systemLog.scrollHeight; });
+        return;
+    }
+    const logs = document.getElementById('logs');
+    if (!logs) return;
+    logs.innerText += `\n${line}`;
+    requestAnimationFrame(() => { logs.scrollTop = logs.scrollHeight; });
+}
+
+function appendRuntimeLog(message) {
     const logs = document.getElementById('logs');
     if (!logs) return;
     const time = new Date().toLocaleTimeString();
-    logs.innerText += `\n[${time}] ${message}`;
+    logs.innerText += logs.innerText ? `\n[${time}] ${message}` : `[${time}] ${message}`;
     requestAnimationFrame(() => { logs.scrollTop = logs.scrollHeight; });
     collectErrorsFromText(message);
+}
+
+function clearRuntimeOutput() {
+    const logs = document.getElementById('logs');
+    if (logs) logs.innerText = '';
+    collectedErrors = [];
+    renderErrors();
 }
 
 function collectErrorsFromText(text) {
@@ -64,7 +86,7 @@ function setTaskProgress(percent, message, running = true) {
     setStatus(message, running ? 'running' : 'done');
 }
 
-function setBusy(message) { currentBusyTask = message; setTaskProgress(5, message, true); }
+function setBusy(message) { currentBusyTask = message; setTaskProgress(5, message, true); appendLog(message); }
 function setDone(message) { currentBusyTask = null; setTaskProgress(100, message, false); appendLog(`✅ ${message}`); }
 function setError(message) { currentBusyTask = null; setStatus(message, 'error'); appendLog(`❌ ${message}`); }
 
@@ -91,10 +113,12 @@ async function workspaceApi(url, payload = {}, method = 'POST') {
 async function streamRuntimeCommand(command, title, progress = 50) {
     const workspace = getWorkspacePath();
     if (!workspace) { setError('Workspace не выбран'); return false; }
+    clearRuntimeOutput();
     setTaskProgress(progress, title || command, true);
     appendLog(`▶ ${title || command} live`);
+    appendRuntimeLog(`▶ ${title || command} live`);
     const response = await fetch('/api/runtime/command-stream', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({workspace, command, device: getSelectedDevice()}) });
-    if (!response.ok || !response.body) { setError(`Не удалось открыть live stream: ${title || command}`); return false; }
+    if (!response.ok || !response.body) { setError(`Не удалось открыть live stream: ${title || command}`); appendRuntimeLog(`❌ Не удалось открыть live stream: ${title || command}`); return false; }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -108,11 +132,11 @@ async function streamRuntimeCommand(command, title, progress = 50) {
         for (const raw of lines) {
             if (!raw.trim()) continue;
             let event;
-            try { event = JSON.parse(raw); } catch (_) { appendLog(raw); continue; }
-            if (event.type === 'line') { appendLog(event.message); updateProgressFromLine(event.message); }
-            else if (event.type === 'error') { ok = false; setError(event.message); }
-            else if (event.type === 'publish') { appendLog(event.success ? '✅ OTA публикация выполнена' : `OTA публикация пропущена: ${event.result?.message || ''}`); }
-            else if (event.type === 'done') { ok = Number(event.returncode) === 0; appendLog(ok ? `✅ Выполнено: ${title || command}` : `❌ Ошибка: ${title || command} exit ${event.returncode}`); }
+            try { event = JSON.parse(raw); } catch (_) { appendRuntimeLog(raw); continue; }
+            if (event.type === 'line') { appendRuntimeLog(event.message); updateProgressFromLine(event.message); }
+            else if (event.type === 'error') { ok = false; appendRuntimeLog(`❌ ${event.message}`); setError(event.message); }
+            else if (event.type === 'publish') { const message = event.success ? '✅ OTA публикация выполнена' : `OTA публикация пропущена: ${event.result?.message || ''}`; appendRuntimeLog(message); appendLog(message); }
+            else if (event.type === 'done') { ok = Number(event.returncode) === 0; appendRuntimeLog(ok ? `✅ Выполнено: ${title || command}` : `❌ Ошибка: ${title || command} exit ${event.returncode}`); }
         }
     }
     if (!ok) setError(`Ошибка: ${title || command}`);
@@ -165,10 +189,13 @@ async function stopRuntimeCommand() {
 
 async function installLatestApk() {
     const workspace = getWorkspacePath();
+    clearRuntimeOutput();
     setTaskProgress(40, 'Отправляю APK на устройство', true);
+    appendLog('▶ Install latest APK');
+    appendRuntimeLog('▶ Install latest APK');
     const data = await workspaceApi('/api/runtime/install-latest-apk', {workspace, device: getSelectedDevice()});
-    if (data.result?.stdout) appendLog(data.result.stdout);
-    if (data.result?.stderr) appendLog(data.result.stderr);
+    if (data.result?.stdout) appendRuntimeLog(data.result.stdout);
+    if (data.result?.stderr) appendRuntimeLog(data.result.stderr);
     if (data.success) setDone('APK установлен'); else setError('Ошибка установки APK');
 }
 
@@ -176,9 +203,12 @@ async function restartCurrentApp() {
     const workspace = getWorkspacePath();
     const packageName = document.getElementById('packageName').value;
     if (!packageName) { setError('Укажите package name'); return; }
+    clearRuntimeOutput();
+    appendLog(`▶ Restart app: ${packageName}`);
+    appendRuntimeLog(`▶ Restart app: ${packageName}`);
     const data = await workspaceApi('/api/runtime/restart-app', {workspace, device: getSelectedDevice(), package_name: packageName});
-    if (data.result?.stdout) appendLog(data.result.stdout);
-    if (data.result?.stderr) appendLog(data.result.stderr);
+    if (data.result?.stdout) appendRuntimeLog(data.result.stdout);
+    if (data.result?.stderr) appendRuntimeLog(data.result.stderr);
     if (data.success) setDone('Приложение перезапущено'); else setError('Ошибка перезапуска приложения');
 }
 
@@ -276,6 +306,7 @@ async function loadDevices() {
 
 window.addEventListener('load', () => {
     setStatus('Запуск DevConsole runtime', 'running');
+    appendLog('DevConsole runtime initialized...');
     loadSystemStatus();
     loadDevices();
     loadProjects();
