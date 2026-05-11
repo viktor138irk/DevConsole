@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 import paramiko
 
 from backend.android_tools import find_apks
+from backend.artifacts_registry import record_apk_artifact
 from backend.projects_registry import find_project_by_workspace
 from backend.pubspec_tools import read_pubspec_version
 from backend.runtime_logs import add_log
@@ -110,6 +111,21 @@ def publish_project_ota(workspace: str) -> dict:
     finally:
         transport.close()
 
+    artifact = record_apk_artifact(
+        workspace=workspace,
+        apk_path=apk_path,
+        project_name=project.get('name'),
+        version=version,
+        build=build,
+        ota_result={
+            'success': True,
+            'latest_json': latest_json,
+            'uploaded': [latest_apk_name, versioned_apk_name, latest_json_name],
+        },
+        source='ota_publish',
+    )
+
+    add_log(f'APK artifact saved: {artifact.get("apk_name")}')
     add_log(f'OTA publish completed: {latest_json.get("apk_url")}')
 
     return {
@@ -117,5 +133,6 @@ def publish_project_ota(workspace: str) -> dict:
         'apk': apk_path,
         'latest_json': latest_json,
         'uploaded': [latest_apk_name, versioned_apk_name, latest_json_name],
+        'artifact': artifact,
         'published_at': datetime.utcnow().isoformat() + 'Z',
     }
