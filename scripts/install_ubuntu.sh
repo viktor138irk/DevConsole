@@ -25,6 +25,14 @@ require_root() {
   fi
 }
 
+setup_git_safe_directory() {
+  info "Настраиваю Git safe.directory"
+  git config --global --add safe.directory "${APP_DIR}" || true
+  if id -u "${APP_USER}" >/dev/null 2>&1; then
+    sudo -u "${APP_USER}" git config --global --add safe.directory "${APP_DIR}" || true
+  fi
+}
+
 install_docker() {
   info "Устанавливаю Docker"
 
@@ -91,6 +99,8 @@ create_user_and_dirs() {
 
 clone_or_update_repo() {
   info "Загружаю DevConsole из GitHub"
+  setup_git_safe_directory
+
   if [[ -d "${APP_DIR}/.git" ]]; then
     git -C "${APP_DIR}" fetch origin "${BRANCH}"
     git -C "${APP_DIR}" reset --hard "origin/${BRANCH}"
@@ -100,6 +110,7 @@ clone_or_update_repo() {
     git clone --branch "${BRANCH}" "${REPO_URL}" "${APP_DIR}"
   fi
   chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
+  setup_git_safe_directory
 }
 
 setup_python() {
@@ -121,7 +132,7 @@ DEVCONSOLE_LOG_DIR=${LOG_DIR}
 DEVCONSOLE_USB_DIR=${USB_DIR}
 DEVCONSOLE_DATABASE_URL=sqlite+aiosqlite:///${DATA_DIR}/devconsole.db
 
-# Insert your OpenAI API key here
+# OpenAI API key can be added later from web panel
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5
 
@@ -206,7 +217,7 @@ print_result() {
   echo "Data dir:   ${DATA_DIR}"
   echo "USB dir:    ${USB_DIR}"
   echo ""
-  warn "Не забудь прописать OPENAI_API_KEY в ${APP_DIR}/.env и перезапустить: systemctl restart devconsole"
+  warn "OpenAI API key можно добавить позже через web panel: http://SERVER_IP:${PORT}"
 }
 
 main() {
@@ -218,6 +229,7 @@ main() {
   setup_env
   setup_usb_debug
   setup_docker_permissions
+  setup_git_safe_directory
   setup_systemd
   print_result
 }
