@@ -37,6 +37,7 @@ class OpenAIConfigRequest(BaseModel):
 
 class PromptTestRequest(BaseModel):
     prompt: str
+    task_type: str | None = None
 
 
 @app.get('/')
@@ -105,26 +106,26 @@ async def test_prompt(payload: PromptTestRequest):
         raise HTTPException(status_code=400, detail='Prompt is empty')
 
     try:
-        answer = await ask_ai(prompt)
+        result = await ask_ai(prompt, payload.task_type)
     except OpenAIConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {
         'success': True,
-        'model': get_openai_model(),
-        'answer': answer,
+        'model': result['model'],
+        'answer': result['answer'],
     }
 
 
 @app.post('/api/settings/openai/test')
 async def test_openai_connection():
     try:
-        answer = await ask_ai('Reply with exactly: DevConsole AI connection OK')
+        result = await ask_ai('Reply with exactly: DevConsole AI connection OK', 'test')
     except OpenAIConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {
         'success': True,
-        'model': get_openai_model(),
-        'answer': answer,
+        'model': result['model'],
+        'answer': result['answer'],
     }
