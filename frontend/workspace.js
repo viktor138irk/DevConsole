@@ -25,6 +25,105 @@ async function workspaceApi(url, payload = {}, method = 'POST') {
     return await response.json();
 }
 
+function getSelectedDevice() {
+    const select = document.getElementById('deviceSelect');
+
+    if (!select) {
+        return null;
+    }
+
+    return select.value || null;
+}
+
+async function loadRuntimeCommands() {
+    const container = document.getElementById('runtimeButtons');
+
+    if (!container) {
+        return;
+    }
+
+    const data = await workspaceApi('/api/runtime/commands', {}, 'GET');
+
+    const commands = data.commands || [];
+
+    container.innerHTML = commands.map(command => `
+        <button onclick="runRuntimeCommand('${command.id}')">
+            ${command.label}
+        </button>
+    `).join('');
+}
+
+async function runRuntimeCommand(command) {
+    const workspace = document.getElementById('workspacePath').value;
+
+    if (!workspace) {
+        appendLog('Workspace не выбран');
+        return;
+    }
+
+    appendLog(`Запуск runtime команды: ${command}`);
+
+    const data = await workspaceApi('/api/runtime/command', {
+        workspace,
+        command,
+        device: getSelectedDevice()
+    });
+
+    if (data.result?.stdout) {
+        appendLog(data.result.stdout);
+    }
+
+    if (data.result?.stderr) {
+        appendLog(data.result.stderr);
+    }
+
+    appendLog(data.success
+        ? `Команда выполнена: ${data.label}`
+        : `Ошибка runtime команды: ${data.label}`
+    );
+}
+
+async function installLatestApk() {
+    const workspace = document.getElementById('workspacePath').value;
+
+    const data = await workspaceApi('/api/runtime/install-latest-apk', {
+        workspace,
+        device: getSelectedDevice()
+    });
+
+    if (data.result?.stdout) {
+        appendLog(data.result.stdout);
+    }
+
+    if (data.result?.stderr) {
+        appendLog(data.result.stderr);
+    }
+}
+
+async function restartCurrentApp() {
+    const workspace = document.getElementById('workspacePath').value;
+    const packageName = document.getElementById('packageName').value;
+
+    if (!packageName) {
+        appendLog('Укажите package name');
+        return;
+    }
+
+    const data = await workspaceApi('/api/runtime/restart-app', {
+        workspace,
+        device: getSelectedDevice(),
+        package_name: packageName
+    });
+
+    if (data.result?.stdout) {
+        appendLog(data.result.stdout);
+    }
+
+    if (data.result?.stderr) {
+        appendLog(data.result.stderr);
+    }
+}
+
 async function loadProjects() {
     const container = document.getElementById('projectsList');
 
@@ -143,8 +242,9 @@ async function loadDevices() {
     const data = await workspaceApi('/api/android/devices');
 
     const container = document.getElementById('devices');
+    const select = document.getElementById('deviceSelect');
 
-    if (!container) {
+    if (!container || !select) {
         return;
     }
 
@@ -156,6 +256,7 @@ async function loadDevices() {
 
     if (devices.length === 0) {
         container.innerHTML = 'Устройства не подключены';
+        select.innerHTML = '<option value="">Нет устройств</option>';
         return;
     }
 
@@ -168,10 +269,17 @@ async function loadDevices() {
             </div>
         `;
     }).join('');
+
+    select.innerHTML = devices.map(device => {
+        const id = device.split(/\s+/)[0];
+
+        return `<option value="${id}">${id}</option>`;
+    }).join('');
 }
 
 window.addEventListener('load', () => {
     loadDevices();
     loadProjects();
+    loadRuntimeCommands();
     appendLog('DevConsole workspace runtime готов');
 });
