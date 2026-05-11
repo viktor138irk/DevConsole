@@ -1,6 +1,7 @@
 from openai import OpenAI
 
-from backend.config_store import get_openai_key, get_openai_model
+from backend.config_store import get_openai_key
+from backend.model_router import choose_model
 
 
 class OpenAIConfigurationError(Exception):
@@ -18,12 +19,16 @@ def _client() -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
-async def ask_ai(prompt: str):
+async def ask_ai(prompt: str, task_type: str | None = None):
     client = _client()
+    model = choose_model(task_type=task_type, prompt=prompt)
 
     response = client.responses.create(
-        model=get_openai_model(),
+        model=model,
         input=prompt
     )
 
-    return response.output_text
+    return {
+        'model': model,
+        'answer': response.output_text
+    }
