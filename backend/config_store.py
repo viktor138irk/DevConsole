@@ -57,6 +57,25 @@ def get_openai_model() -> str:
     return get_setting('OPENAI_MODEL') or os.getenv('OPENAI_MODEL') or 'gpt-5'
 
 
+def get_github_username() -> str:
+    return get_setting('GITHUB_USERNAME') or os.getenv('GITHUB_USERNAME') or ''
+
+
+def get_github_token() -> Optional[str]:
+    return get_setting('GITHUB_TOKEN') or os.getenv('GITHUB_TOKEN') or None
+
+
+def has_github_token() -> bool:
+    return bool(get_github_token())
+
+
+def get_github_public_config() -> dict:
+    return {
+        'username': get_github_username(),
+        'token_set': has_github_token(),
+    }
+
+
 def get_proxy_config() -> dict:
     return {
         'enabled': (get_setting('PROXY_ENABLED') or os.getenv('PROXY_ENABLED') or '0') == '1',
