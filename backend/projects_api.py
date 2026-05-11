@@ -7,6 +7,7 @@ from backend.projects_registry import (
     save_project,
     update_project_settings,
 )
+from backend.pubspec_tools import read_pubspec_version
 
 router = APIRouter(prefix='/api/projects', tags=['projects'])
 
@@ -56,6 +57,19 @@ async def project_settings(workspace: str):
         'success': True,
         'project': project,
     }
+
+
+@router.get('/pubspec-version')
+async def project_pubspec_version(workspace: str):
+    project = find_project_by_workspace(workspace)
+    if not project:
+        raise HTTPException(status_code=404, detail='Project not found')
+
+    result = read_pubspec_version(workspace)
+    if not result:
+        raise HTTPException(status_code=404, detail='pubspec.yaml version not found')
+
+    return result
 
 
 @router.post('/settings')
