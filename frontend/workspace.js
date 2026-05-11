@@ -41,6 +41,11 @@ function getSelectedDevice() {
     return select.value || null;
 }
 
+function getWorkspacePath() {
+    const input = document.getElementById('workspacePath');
+    return input ? input.value.trim() : '';
+}
+
 async function loadSystemStatus() {
     const data = await workspaceApi('/api/system/status', {}, 'GET');
     const status = document.getElementById('githubStatus');
@@ -85,33 +90,35 @@ async function saveGitHubSettings() {
     }
 }
 
-async function loadRuntimeCommands() {
+function renderGroupedRuntimeButtons() {
     const container = document.getElementById('runtimeButtons');
 
     if (!container) {
         return;
     }
 
-    const data = await workspaceApi('/api/runtime/commands', {}, 'GET');
-
-    const commands = data.commands || [];
-
-    container.innerHTML = commands.map(command => `
-        <button onclick="runRuntimeCommand('${command.id}')">
-            ${command.label}
-        </button>
-    `).join('');
+    container.innerHTML = `
+        <button onclick="runRuntimeScenario('check')">Проверить</button>
+        <button onclick="runRuntimeScenario('run_profile')">Запустить</button>
+        <button onclick="runRuntimeScenario('build')">Собрать APK</button>
+        <button onclick="runRuntimeScenario('install')">Установить APK</button>
+        <button onclick="runRuntimeScenario('diagnostics')">Диагностика</button>
+    `;
 }
 
-async function runRuntimeCommand(command) {
-    const workspace = document.getElementById('workspacePath').value;
+async function loadRuntimeCommands() {
+    renderGroupedRuntimeButtons();
+}
+
+async function executeRuntimeCommand(command, title) {
+    const workspace = getWorkspacePath();
 
     if (!workspace) {
         appendLog('Workspace не выбран');
-        return;
+        return false;
     }
 
-    appendLog(`Запуск runtime команды: ${command}`);
+    appendLog(`▶ ${title || command}`);
 
     const data = await workspaceApi('/api/runtime/command', {
         workspace,
@@ -128,13 +135,71 @@ async function runRuntimeCommand(command) {
     }
 
     appendLog(data.success
-        ? `Команда выполнена: ${data.label}`
-        : `Ошибка runtime команды: ${data.label || command}`
+        ? `✅ Выполнено: ${data.label || command}`
+        : `❌ Ошибка: ${data.label || command}`
     );
+
+    return Boolean(data.success);
+}
+
+async function runRuntimeScenario(scenario) {
+    const workspace = getWorkspacePath();
+
+    if (!workspace) {
+        appendLog('Workspace не выбран');
+        return;
+    }
+
+    if (scenario === 'check') {
+        appendLog('=== Проверка проекта: git pull + flutter pub get ===');
+        if (!await executeRuntimeCommand('git_pull', 'Git Pull')) return;
+        await executeRuntimeCommand('flutter_pub_get', 'Flutter Pub Get');
+        appendLog('=== Проверка завершена ===');
+        return;
+    }
+
+    if (scenario === 'run_profile') {
+        appendLog('=== Запуск на телефоне в profile режиме ===');
+        if (!getSelectedDevice()) {
+            appendLog('Устройство не выбрано');
+            return;
+        }
+        if (!await executeRuntimeCommand('flutter_pub_get', 'Подготовка зависимостей')) return;
+        await executeRuntimeCommand('flutter_run_profile', 'Flutter Run --profile');
+        appendLog('=== Запуск завершён ===');
+        return;
+    }
+
+    if (scenario === 'build') {
+        appendLog('=== Сборка APK: clean + pub get + release build ===');
+        if (!await executeRuntimeCommand('flutter_clean', 'Flutter Clean')) return;
+        if (!await executeRuntimeCommand('flutter_pub_get', 'Flutter Pub Get')) return;
+        await executeRuntimeCommand('flutter_build_apk', 'Flutter Build APK');
+        appendLog('=== Сборка завершена ===');
+        return;
+    }
+
+    if (scenario === 'install') {
+        appendLog('=== Установка последнего APK на устройство ===');
+        await installLatestApk();
+        appendLog('=== Установка завершена ===');
+        return;
+    }
+
+    if (scenario === 'diagnostics') {
+        appendLog('=== Диагностика Android runtime ===');
+        await executeRuntimeCommand('adb_reconnect', 'ADB Reconnect');
+        await executeRuntimeCommand('adb_logcat', 'ADB Logcat Snapshot');
+        appendLog('=== Диагностика завершена ===');
+    }
+}
+
+async function runRuntimeCommand(command) {
+    await executeRuntimeCommand(command, command);
 }
 
 async function installLatestApk() {
-    const workspace = document.getElementById('workspacePath').value;
+    const workspace = getWorkspacePath();
 
     const data = await workspaceApi('/api/runtime/install-latest-apk', {
         workspace,
@@ -148,10 +213,12 @@ async function installLatestApk() {
     if (data.result?.stderr) {
         appendLog(data.result.stderr);
     }
+
+    appendLog(data.success ? '✅ APK установлен' : '❌ Ошибка установки APK');
 }
 
 async function restartCurrentApp() {
-    const workspace = document.getElementById('workspacePath').value;
+    const workspace = getWorkspacePath();
     const packageName = document.getElementById('packageName').value;
 
     if (!packageName) {
@@ -224,7 +291,7 @@ async function registerCurrentProject(repoUrl, workspace, stack = 'unknown') {
 }
 
 async function loadWorkspaceTree() {
-    const workspace = document.getElementById('workspacePath').value;
+    const workspace = getWorkspacePath();
 
     if (!workspace) {
         appendLog('Workspace path пустой');
