@@ -14,13 +14,16 @@ from backend.config_store import (
 )
 from backend.openai_client import OpenAIConfigurationError, ask_ai
 from backend.project_analyzer import analyze_github_project
+from backend.projects_api import router as projects_router
+from backend.runtime_api import router as runtime_router
+from backend.runtime_logs import add_log
 from backend.shell_runner import run_command
 from backend.workspace_api import router as workspace_router
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT_DIR / 'frontend'
 
-app = FastAPI(title='DevConsole', version='0.2.0')
+app = FastAPI(title='DevConsole', version='0.3.0')
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,6 +34,8 @@ app.add_middleware(
 )
 
 app.include_router(workspace_router)
+app.include_router(projects_router)
+app.include_router(runtime_router)
 
 if FRONTEND_DIR.exists():
     app.mount('/assets', StaticFiles(directory=FRONTEND_DIR / 'assets'), name='assets')
@@ -69,7 +74,7 @@ async def workspace_js():
 async def health():
     return {
         'status': 'ok',
-        'version': '0.2.0',
+        'version': '0.3.0',
         'openai_configured': has_openai_key(),
     }
 
@@ -78,7 +83,7 @@ async def health():
 async def system_status():
     return {
         'project': 'DevConsole',
-        'version': '0.2.0',
+        'version': '0.3.0',
         'status': 'running',
         'openai_configured': has_openai_key(),
         'openai_model': get_openai_model(),
@@ -96,6 +101,8 @@ async def save_openai_settings(payload: OpenAIConfigRequest):
     set_setting('OPENAI_API_KEY', api_key)
     set_setting('OPENAI_MODEL', model)
 
+    add_log('OpenAI settings updated')
+
     return {
         'success': True,
         'message': 'OpenAI settings saved',
@@ -109,10 +116,15 @@ async def test_prompt(payload: PromptTestRequest):
     if not prompt:
         raise HTTPException(status_code=400, detail='Prompt is empty')
 
+    add_log('AI task started')
+
     try:
         result = await ask_ai(prompt, payload.task_type)
     except OpenAIConfigurationError as exc:
+        add_log(f'AI configuration error: {exc}')
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    add_log('AI task completed')
 
     return {
         'success': True,
@@ -128,7 +140,11 @@ async def analyze_project(payload: ProjectAnalyzeRequest):
     if not repo_url.startswith('http'):
         raise HTTPException(status_code=400, detail='Invalid repository URL')
 
+    add_log(f'Analyzing project: {repo_url}')
+
     analysis = analyze_github_project(repo_url)
+
+    add_log(f'Project analyzed: {analysis.stack}')
 
     return {
         'success': True,
@@ -142,8 +158,13 @@ async def install_dependencies(payload: ProjectAnalyzeRequest):
 
     outputs = []
 
+    add_log('Installing dependencies')
+
     for step in analysis.dependency_steps:
+        add_log(f'Running: {step.command}')
         outputs.append(run_command(step.command, step.cwd, 1800))
+
+    add_log('Dependencies installed')
 
     return {
         'success': True,
@@ -154,13 +175,18 @@ async def install_dependencies(payload: ProjectAnalyzeRequest):
 
 @app.post('/api/android/devices')
 async def android_devices():
+    add_log('Refreshing Android devices')
     return list_devices()
 
 
 @app.post('/api/android/build')
 async def android_build(payload: WorkspaceRequest):
+    add_log(f'Android build started: {payload.workspace}')
+
     result = build_android(payload.workspace)
     apks = find_apks(payload.workspace)
+
+    add_log('Android build completed')
 
     return {
         'success': result['returncode'] == 0,
@@ -171,7 +197,11 @@ async def android_build(payload: WorkspaceRequest):
 
 @app.post('/api/android/install-latest')
 async def android_install_latest(payload: WorkspaceRequest):
+    add_log(f'Installing APK to device: {payload.device}')
+
     result = install_latest_apk(payload.workspace)
+
+    add_log('APK installation completed')
 
     return {
         'success': result['returncode'] == 0,
