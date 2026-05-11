@@ -8,3 +8,4 @@ aiosqlite
 httpx
 httpx-socks
 python-multipart
+paramiko
