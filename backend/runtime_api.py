@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.android_tools import find_apks
+from backend.android_tools import find_apks, list_devices
 from backend.ota_publish import publish_project_ota
 from backend.runtime_logs import get_logs, add_log
 from backend.shell_runner import run_command
@@ -35,9 +35,10 @@ def _flutter(command: str) -> str:
 
 class RuntimeCommandRequest(BaseModel):
     workspace: str
-    command: str
+    command: str | None = None
     device: str | None = None
     package_name: str | None = None
+    apk_path: str | None = None
 
 
 class RuntimeStopRequest(BaseModel):
@@ -62,6 +63,22 @@ def _workspace_cwd(workspace: str) -> str:
     if not path.exists():
         raise HTTPException(status_code=400, detail='Workspace path does not exist')
     return path.as_posix()
+
+
+def _safe_apk_path(workspace: str, apk_path: str | None) -> Path:
+    if not apk_path:
+        raise HTTPException(status_code=400, detail='apk_path is required')
+    root = Path(workspace).resolve()
+    target = Path(apk_path).resolve()
+    if not root.exists():
+        raise HTTPException(status_code=400, detail='Workspace path does not exist')
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail='APK file not found')
+    if root not in target.parents and target != root:
+        raise HTTPException(status_code=403, detail='APK is outside workspace')
+    if target.suffix.lower() != '.apk':
+        raise HTTPException(status_code=403, detail='Only APK files are allowed')
+    return target
 
 
 def _with_device(command: str, device: str | None, enabled: bool) -> str:
@@ -219,6 +236,48 @@ async def runtime_install_latest_apk(payload: RuntimeCommandRequest):
     result = run_command(command, cwd, timeout=900)
     add_log(f"Runtime APK install finished (exit {result['returncode']})")
     return {'success': result['returncode'] == 0, 'apk': apks[0], 'device': payload.device, 'result': result}
+
+
+@router.post('/install-apk')
+async def runtime_install_apk(payload: RuntimeCommandRequest):
+    cwd = _workspace_cwd(payload.workspace)
+    apk = _safe_apk_path(cwd, payload.apk_path)
+    adb = f'{_runtime_env_prefix()}adb'
+    if payload.device:
+        adb = f'{_runtime_env_prefix()}adb -s {payload.device}'
+    command = f'{adb} install -r "{apk.as_posix()}"'
+    add_log(f'Runtime selected APK install started: {apk.name}')
+    result = run_command(command, cwd, timeout=900)
+    add_log(f"Runtime selected APK install finished: {apk.name} (exit {result['returncode']})")
+    return {'success': result['returncode'] == 0, 'apk': apk.as_posix(), 'device': payload.device, 'result': result}
+
+
+@router.post('/install-apk-all-devices')
+async def runtime_install_apk_all_devices(payload: RuntimeCommandRequest):
+    cwd = _workspace_cwd(payload.workspace)
+    apk = _safe_apk_path(cwd, payload.apk_path)
+    devices = list_devices().get('devices') or []
+    installed = []
+    adb_base = f'{_runtime_env_prefix()}adb'
+    for device in devices:
+        serial = device.get('serial')
+        if not serial:
+            continue
+        command = f'{adb_base} -s {serial} install -r "{apk.as_posix()}"'
+        result = run_command(command, cwd, timeout=900)
+        installed.append({'serial': serial, 'success': result['returncode'] == 0, 'result': result})
+    add_log(f'Runtime APK install all devices finished: {apk.name}')
+    return {'success': all(item['success'] for item in installed) if installed else False, 'apk': apk.as_posix(), 'devices': installed}
+
+
+@router.post('/delete-apk')
+async def runtime_delete_apk(payload: RuntimeCommandRequest):
+    cwd = _workspace_cwd(payload.workspace)
+    apk = _safe_apk_path(cwd, payload.apk_path)
+    apk_name = apk.name
+    apk.unlink()
+    add_log(f'APK artifact deleted: {apk_name}')
+    return {'success': True, 'deleted': apk_name}
 
 
 @router.post('/restart-app')
