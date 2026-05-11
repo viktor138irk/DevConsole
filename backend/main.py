@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,6 +65,34 @@ class ProjectAnalyzeRequest(BaseModel):
 class WorkspaceRequest(BaseModel):
     workspace: str
     device: str | None = None
+
+
+def _safe_workspace_file(workspace: str, file_path: str) -> Path:
+    root = Path(workspace).resolve()
+    target = Path(unquote(file_path)).resolve()
+    if not root.exists():
+        raise HTTPException(status_code=400, detail='Workspace path does not exist')
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail='File not found')
+    if root not in target.parents and target != root:
+        raise HTTPException(status_code=403, detail='File is outside workspace')
+    if target.suffix.lower() != '.apk':
+        raise HTTPException(status_code=403, detail='Only APK files are allowed')
+    return target
+
+
+def _apk_meta(path: str, workspace: str) -> dict:
+    apk = Path(path).resolve()
+    stat = apk.stat()
+    return {
+        'name': apk.name,
+        'path': apk.as_posix(),
+        'relative_path': apk.relative_to(Path(workspace).resolve()).as_posix(),
+        'size_bytes': stat.st_size,
+        'mtime': stat.st_mtime,
+        'open_url': f'/api/android/apk/open?workspace={workspace}&path={apk.as_posix()}',
+        'download_url': f'/api/android/apk/download?workspace={workspace}&path={apk.as_posix()}',
+    }
 
 
 @app.get('/')
@@ -218,6 +247,34 @@ async def android_build(payload: WorkspaceRequest):
         'result': result,
         'apks': apks,
     }
+
+
+@app.get('/api/android/apks')
+async def android_apks(workspace: str):
+    root = Path(workspace).resolve()
+    if not root.exists():
+        raise HTTPException(status_code=400, detail='Workspace path does not exist')
+    flutter_apk_dir = root / 'build' / 'app' / 'outputs' / 'flutter-apk'
+    apks = []
+    if flutter_apk_dir.exists():
+        apks = sorted(flutter_apk_dir.glob('*.apk'), key=lambda p: p.stat().st_mtime, reverse=True)
+    return {
+        'success': True,
+        'directory': flutter_apk_dir.as_posix(),
+        'apks': [_apk_meta(apk.as_posix(), root.as_posix()) for apk in apks],
+    }
+
+
+@app.get('/api/android/apk/open')
+async def android_open_apk(workspace: str, path: str):
+    apk = _safe_workspace_file(workspace, path)
+    return FileResponse(apk, media_type='application/vnd.android.package-archive', filename=apk.name)
+
+
+@app.get('/api/android/apk/download')
+async def android_download_apk(workspace: str, path: str):
+    apk = _safe_workspace_file(workspace, path)
+    return FileResponse(apk, media_type='application/vnd.android.package-archive', filename=apk.name, headers={'Content-Disposition': f'attachment; filename="{apk.name}"'})
 
 
 @app.post('/api/android/install-latest')
