@@ -19,6 +19,9 @@ input,select{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px
 .section{background:#13161c;border:1px solid #2a2f3a;border-radius:12px;padding:14px}.section h3{margin-top:0}.projects-list{max-height:260px;overflow:auto}
 .runtime-grid{display:flex;gap:10px;flex-wrap:wrap}
 .status{font-size:12px;color:#9ca3af;margin-top:8px}
+.progress-wrap{display:none;margin-top:12px;background:#0f1115;border:1px solid #2a2f3a;border-radius:10px;overflow:hidden}
+.progress-bar{height:10px;width:0;background:#2563eb;transition:width .25s ease}
+.progress-label{font-size:12px;color:#d1d5db;margin-top:8px;line-height:1.4}
 </style>
 </head>
 <body>
@@ -48,6 +51,8 @@ input,select{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px
 <button onclick="loadWorkspaceTree()">Открыть workspace</button>
 <button onclick="buildApk()">Собрать APK</button>
 </div>
+<div class="progress-wrap" id="analysisProgressWrap"><div class="progress-bar" id="analysisProgressBar"></div></div>
+<div class="progress-label" id="analysisProgressLabel"></div>
 </div>
 
 <div class="section">
@@ -101,20 +106,8 @@ input,select{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px
 <script src="/workspace.js"></script>
 <script>
 async function api(url,payload={},method='POST'){const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:method==='GET'?undefined:JSON.stringify(payload)});return await r.json();}
-
-async function analyzeProject(){
-const repo_url=document.getElementById('repoUrl').value;
-appendLog('Начат анализ проекта: '+repo_url);
-const data=await api('/api/projects/analyze',{repo_url});
-if(data.analysis?.workspace){
-appendLog('Workspace создан: '+data.analysis.workspace);
-document.getElementById('workspacePath').value=data.analysis.workspace;
-await registerCurrentProject(repo_url,data.analysis.workspace,data.analysis.detected_stack?.join(', ')||'unknown');
-loadWorkspaceTree();
-}
-if(data.detail){appendLog('Ошибка: '+data.detail);}else{appendLog('Анализ проекта завершён');}
-}
-
+function setAnalysisProgress(percent,message){const wrap=document.getElementById('analysisProgressWrap');const bar=document.getElementById('analysisProgressBar');const label=document.getElementById('analysisProgressLabel');if(wrap){wrap.style.display='block';}if(bar){bar.style.width=percent+'%';}if(label){label.innerText=percent+'% — '+message;}appendLog(percent+'% — '+message);}
+async function analyzeProject(){const repo_url=document.getElementById('repoUrl').value.trim();if(!repo_url){appendLog('0% — Укажи GitHub repository URL');return;}setAnalysisProgress(5,'Проверяю адрес репозитория');setAnalysisProgress(15,'Готовлю доступ и рабочую папку');setAnalysisProgress(30,'Клонирую или обновляю репозиторий');const data=await api('/api/projects/analyze',{repo_url});if(data.detail){setAnalysisProgress(100,'Ошибка анализа: '+data.detail);return;}setAnalysisProgress(60,'Репозиторий получен, сканирую структуру');if(data.analysis?.detected_stack?.length){setAnalysisProgress(72,'Стек: '+data.analysis.detected_stack.join(', '));}else{setAnalysisProgress(72,'Стек не определён автоматически');}if(data.analysis?.workspace){setAnalysisProgress(82,'Workspace: '+data.analysis.workspace);document.getElementById('workspacePath').value=data.analysis.workspace;setAnalysisProgress(90,'Регистрирую проект');await registerCurrentProject(repo_url,data.analysis.workspace,data.analysis.detected_stack?.join(', ')||'unknown');setAnalysisProgress(96,'Открываю дерево файлов');loadWorkspaceTree();}setAnalysisProgress(100,'Анализ завершён');}
 async function installDependencies(){const repo_url=document.getElementById('repoUrl').value;const data=await api('/api/projects/install-dependencies',{repo_url});document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
 async function buildApk(){const workspace=document.getElementById('workspacePath').value;const data=await api('/api/android/build',{workspace});document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
 </script>
