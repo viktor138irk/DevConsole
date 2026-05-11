@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -9,7 +10,24 @@ from backend.shell_runner import run_command
 
 router = APIRouter(prefix='/api/runtime', tags=['runtime'])
 
-FLUTTER_ENV = 'export HOME=/root PUB_CACHE=/root/.pub-cache PATH=/root/flutter/bin:/root/Android/cmdline-tools/latest/bin:/root/Android/platform-tools:$PATH && '
+
+def _runtime_env_prefix() -> str:
+    runtime_home = os.getenv('DEVCONSOLE_RUNTIME_HOME') or os.getenv('HOME') or '/home/devconsole'
+    flutter_home = os.getenv('FLUTTER_HOME') or f'{runtime_home}/flutter'
+    android_home = os.getenv('ANDROID_HOME') or os.getenv('ANDROID_SDK_ROOT') or f'{runtime_home}/Android'
+    pub_cache = os.getenv('PUB_CACHE') or f'{runtime_home}/.pub-cache'
+
+    return (
+        f'export HOME="{runtime_home}" '
+        f'PUB_CACHE="{pub_cache}" '
+        f'ANDROID_HOME="{android_home}" '
+        f'ANDROID_SDK_ROOT="{android_home}" '
+        f'PATH="{flutter_home}/bin:{android_home}/cmdline-tools/latest/bin:{android_home}/platform-tools:$PATH" && '
+    )
+
+
+def _flutter(command: str) -> str:
+    return f'{_runtime_env_prefix()}flutter {command}'
 
 
 class RuntimeCommandRequest(BaseModel):
@@ -19,45 +37,46 @@ class RuntimeCommandRequest(BaseModel):
     package_name: str | None = None
 
 
-RUNTIME_COMMANDS: dict[str, dict] = {
-    'git_pull': {
-        'label': 'Git Pull',
-        'command': 'git pull',
-        'timeout': 600,
-    },
-    'flutter_clean': {
-        'label': 'Flutter Clean',
-        'command': f'{FLUTTER_ENV}flutter clean',
-        'timeout': 900,
-    },
-    'flutter_pub_get': {
-        'label': 'Flutter Pub Get',
-        'command': f'{FLUTTER_ENV}flutter pub get',
-        'timeout': 900,
-    },
-    'flutter_build_apk': {
-        'label': 'Flutter Build APK',
-        'command': f'{FLUTTER_ENV}flutter build apk --release',
-        'timeout': 3600,
-    },
-    'flutter_run_profile': {
-        'label': 'Flutter Run Profile',
-        'command': f'{FLUTTER_ENV}flutter run --profile',
-        'timeout': 1800,
-        'device': True,
-    },
-    'adb_reconnect': {
-        'label': 'ADB Reconnect',
-        'command': 'adb reconnect',
-        'timeout': 120,
-    },
-    'adb_logcat': {
-        'label': 'ADB Logcat Snapshot',
-        'command': 'adb logcat -d -t 300',
-        'timeout': 120,
-        'device': True,
-    },
-}
+def _runtime_commands() -> dict[str, dict]:
+    return {
+        'git_pull': {
+            'label': 'Git Pull',
+            'command': 'git pull',
+            'timeout': 600,
+        },
+        'flutter_clean': {
+            'label': 'Flutter Clean',
+            'command': _flutter('clean'),
+            'timeout': 900,
+        },
+        'flutter_pub_get': {
+            'label': 'Flutter Pub Get',
+            'command': _flutter('pub get'),
+            'timeout': 900,
+        },
+        'flutter_build_apk': {
+            'label': 'Flutter Build APK',
+            'command': _flutter('build apk --release'),
+            'timeout': 3600,
+        },
+        'flutter_run_profile': {
+            'label': 'Flutter Run Profile',
+            'command': _flutter('run --profile'),
+            'timeout': 1800,
+            'device': True,
+        },
+        'adb_reconnect': {
+            'label': 'ADB Reconnect',
+            'command': f'{_runtime_env_prefix()}adb reconnect',
+            'timeout': 120,
+        },
+        'adb_logcat': {
+            'label': 'ADB Logcat Snapshot',
+            'command': f'{_runtime_env_prefix()}adb logcat -d -t 300',
+            'timeout': 120,
+            'device': True,
+        },
+    }
 
 
 def _workspace_cwd(workspace: str) -> str:
@@ -98,7 +117,7 @@ async def runtime_commands():
                 'label': config['label'],
                 'needs_device': bool(config.get('device')),
             }
-            for command_id, config in RUNTIME_COMMANDS.items()
+            for command_id, config in _runtime_commands().items()
         ],
     }
 
@@ -112,7 +131,8 @@ async def runtime_event(payload: dict):
 
 @router.post('/command')
 async def runtime_command(payload: RuntimeCommandRequest):
-    config = RUNTIME_COMMANDS.get(payload.command)
+    commands = _runtime_commands()
+    config = commands.get(payload.command)
 
     if not config:
         raise HTTPException(status_code=400, detail='Runtime command is not allowed')
@@ -149,9 +169,9 @@ async def runtime_install_latest_apk(payload: RuntimeCommandRequest):
     if not apks:
         raise HTTPException(status_code=404, detail='APK not found. Build project first.')
 
-    adb = 'adb'
+    adb = f'{_runtime_env_prefix()}adb'
     if payload.device:
-        adb = f'adb -s {payload.device}'
+        adb = f'{_runtime_env_prefix()}adb -s {payload.device}'
 
     command = f'{adb} install -r "{apks[0]}"'
 
@@ -173,9 +193,9 @@ async def runtime_restart_app(payload: RuntimeCommandRequest):
         raise HTTPException(status_code=400, detail='package_name is required')
 
     cwd = _workspace_cwd(payload.workspace)
-    adb = 'adb'
+    adb = f'{_runtime_env_prefix()}adb'
     if payload.device:
-        adb = f'adb -s {payload.device}'
+        adb = f'{_runtime_env_prefix()}adb -s {payload.device}'
 
     command = f'{adb} shell monkey -p {payload.package_name} 1'
 
