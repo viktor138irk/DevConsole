@@ -140,6 +140,7 @@ async function streamRuntimeCommand(command, title, progress = 50) {
         }
     }
     if (!ok) setError(`Ошибка: ${title || command}`);
+    await loadApkArtifacts(false);
     return ok;
 }
 
@@ -166,7 +167,7 @@ async function saveGitHubSettings() {
 function renderGroupedRuntimeButtons() {
     const container = document.getElementById('runtimeButtons');
     if (!container) return;
-    container.innerHTML = `<button onclick="runRuntimeScenario('check')">Проверить</button><button onclick="runRuntimeScenario('run_profile')">Запустить</button><button onclick="runRuntimeScenario('build')">Собрать APK</button><button onclick="runRuntimeScenario('install')">Установить APK</button><button onclick="runRuntimeScenario('diagnostics')">Диагностика</button>`;
+    container.innerHTML = `<button onclick="runRuntimeScenario('check')">Проверить</button><button onclick="runRuntimeScenario('run_profile')">Запустить</button><button onclick="runRuntimeScenario('build')">Собрать APK</button><button onclick="runRuntimeScenario('install')">Установить APK</button><button onclick="runRuntimeScenario('diagnostics')">Диагностика</button><button class="muted" onclick="loadApkArtifacts(true)">APK файлы</button>`;
 }
 
 async function loadRuntimeCommands() { renderGroupedRuntimeButtons(); setStatus('Runtime сценарии готовы', 'done'); }
@@ -177,7 +178,7 @@ async function runRuntimeScenario(scenario) {
     if (!workspace) { setError('Workspace не выбран'); return; }
     if (scenario === 'check') { setBusy('Проверка проекта'); if (!await executeRuntimeCommand('git_pull', 'Git Pull', 25)) return; if (!await executeRuntimeCommand('flutter_pub_get', 'Flutter Pub Get', 70)) return; setDone('Проверка завершена'); return; }
     if (scenario === 'run_profile') { if (!getSelectedDevice()) { setError('Устройство не выбрано'); return; } setBusy('Запуск на телефоне'); if (!await executeRuntimeCommand('flutter_pub_get', 'Подготовка зависимостей', 30)) return; if (!await executeRuntimeCommand('flutter_run_profile', 'Flutter Run --profile', 75)) return; setDone('Запуск завершён'); return; }
-    if (scenario === 'build') { setBusy('Сборка APK'); if (!await executeRuntimeCommand('flutter_clean', 'Flutter Clean', 20)) return; if (!await executeRuntimeCommand('flutter_pub_get', 'Flutter Pub Get', 45)) return; if (!await executeRuntimeCommand('flutter_build_apk', 'Flutter Build APK', 80)) return; setDone('Сборка APK завершена'); return; }
+    if (scenario === 'build') { setBusy('Сборка APK'); if (!await executeRuntimeCommand('flutter_clean', 'Flutter Clean', 20)) return; if (!await executeRuntimeCommand('flutter_pub_get', 'Flutter Pub Get', 45)) return; if (!await executeRuntimeCommand('flutter_build_apk', 'Flutter Build APK', 80)) return; setDone('Сборка APK завершена'); await loadApkArtifacts(false); return; }
     if (scenario === 'install') { setBusy('Установка APK'); await installLatestApk(); return; }
     if (scenario === 'diagnostics') { setBusy('Диагностика Android runtime'); if (!await executeRuntimeCommand('adb_reconnect', 'ADB Reconnect', 40)) return; if (!await executeRuntimeCommand('adb_logcat', 'ADB Logcat Snapshot', 80)) return; setDone('Диагностика завершена'); }
 }
@@ -197,6 +198,7 @@ async function installLatestApk() {
     if (data.result?.stdout) appendRuntimeLog(data.result.stdout);
     if (data.result?.stderr) appendRuntimeLog(data.result.stderr);
     if (data.success) setDone('APK установлен'); else setError('Ошибка установки APK');
+    await loadApkArtifacts(false);
 }
 
 async function restartCurrentApp() {
@@ -210,6 +212,45 @@ async function restartCurrentApp() {
     if (data.result?.stdout) appendRuntimeLog(data.result.stdout);
     if (data.result?.stderr) appendRuntimeLog(data.result.stderr);
     if (data.success) setDone('Приложение перезапущено'); else setError('Ошибка перезапуска приложения');
+}
+
+function humanFileSize(bytes) {
+    const value = Number(bytes || 0);
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderApkArtifacts(apks, directory) {
+    const box = document.getElementById('apkArtifactsList');
+    const meta = document.getElementById('apkArtifactsMeta');
+    if (!box) return;
+    if (meta) meta.innerText = directory || 'build/app/outputs/flutter-apk';
+    if (!apks || apks.length === 0) {
+        box.innerHTML = '<div class="note">APK пока нет. Выполни “Собрать APK”, потом обнови список.</div>';
+        return;
+    }
+    box.innerHTML = apks.map(apk => {
+        const modified = apk.mtime ? new Date(apk.mtime * 1000).toLocaleString() : '';
+        const openUrl = encodeURI(apk.open_url);
+        const downloadUrl = encodeURI(apk.download_url);
+        return `<div class="apk-card"><div class="apk-info"><strong>${apk.name}</strong><small>${apk.relative_path}</small><small>${humanFileSize(apk.size_bytes)} · ${modified}</small></div><div class="apk-actions"><button class="mini-btn" onclick="window.open('${openUrl}','_blank')">Открыть</button><a class="button-link" href="${downloadUrl}">Скачать</a></div></div>`;
+    }).join('');
+}
+
+async function loadApkArtifacts(verbose = true) {
+    const workspace = getWorkspacePath();
+    const box = document.getElementById('apkArtifactsList');
+    if (!box) return;
+    if (!workspace) {
+        box.innerHTML = '<div class="note">Сначала выбери проект.</div>';
+        if (verbose) setError('Workspace не выбран');
+        return;
+    }
+    if (verbose) appendLog('📦 Обновляю APK файлы');
+    const data = await workspaceApi(`/api/android/apks?workspace=${encodeURIComponent(workspace)}`, {}, 'GET');
+    if (data.success) renderApkArtifacts(data.apks || [], data.directory || '');
+    else box.innerHTML = '<div class="note">Не удалось загрузить APK файлы.</div>';
 }
 
 async function loadProjects() {
@@ -231,6 +272,7 @@ function openProject(workspace, name = 'project') {
     appendLog(`Открытие проекта: ${workspace}`);
     setTaskProgress(100, `Проект выбран: ${name}`, false);
     setStatus(`Проект готов: ${name}`, 'done');
+    loadApkArtifacts(false);
 }
 
 async function openEditProjectModal(workspace) {
@@ -254,7 +296,7 @@ async function openEditProjectModal(workspace) {
     document.getElementById('otaBuild').value = ota.build || '';
     document.getElementById('otaNotes').value = ota.notes || '';
     toggleOtaFields();
-    modal.style.display = 'flex';
+    if (modal) modal.style.display = 'flex';
 }
 
 function closeEditProjectModal() { document.getElementById('editProjectModal').style.display = 'none'; }
@@ -304,6 +346,14 @@ async function loadDevices() {
     setStatus(`Android устройства найдены: ${devices.length}`, 'done');
 }
 
+function openAddProjectModal(){document.getElementById('addProjectModal').style.display='flex';}
+function closeAddProjectModal(){document.getElementById('addProjectModal').style.display='none';}
+function toggleAuthFields(){document.getElementById('authFields').style.display=document.getElementById('repoNeedsAuth').checked?'block':'none';}
+function toggleOtaFields(){document.getElementById('otaFields').style.display=document.getElementById('otaEnabled').checked?'block':'none';}
+async function syncPubspecVersion(){const workspace=document.getElementById('editWorkspace').value;if(!workspace){appendLog('Workspace не выбран');return;}appendLog('📦 Читаю pubspec.yaml');const data=await workspaceApi(`/api/projects/pubspec-version?workspace=${encodeURIComponent(workspace)}`,{},'GET');if(data.version){document.getElementById('otaVersion').value=data.version;document.getElementById('otaBuild').value=data.build;appendLog(`✅ Pubspec version synced: ${data.full_version}`);}else{appendLog('❌ Не удалось считать pubspec.yaml');}}
+function setAnalysisProgress(percent,message){const wrap=document.getElementById('analysisProgressWrap');const bar=document.getElementById('analysisProgressBar');const label=document.getElementById('analysisProgressLabel');if(wrap){wrap.style.display='block';}if(bar){bar.style.width=percent+'%';}if(label){label.innerText=percent+'% — '+message;}appendLog(percent+'% — '+message);}
+async function analyzeProject(){const repo_url=document.getElementById('repoUrl').value.trim();if(!repo_url){appendLog('0% — Укажи Git URL');return;}if(document.getElementById('repoNeedsAuth').checked){await saveGitHubSettings();}setAnalysisProgress(5,'Проверяю Git URL');setAnalysisProgress(20,'Готовлю workspace');setAnalysisProgress(35,'Клонирую или обновляю репозиторий');const data=await workspaceApi('/api/projects/analyze',{repo_url});if(data.detail){setAnalysisProgress(100,'Ошибка анализа: '+data.detail);return;}setAnalysisProgress(65,'Репозиторий получен, сканирую структуру');if(data.analysis?.detected_stack?.length){setAnalysisProgress(76,'Стек: '+data.analysis.detected_stack.join(', '));}else{setAnalysisProgress(76,'Стек не определён автоматически');}if(data.analysis?.workspace){setAnalysisProgress(88,'Workspace: '+data.analysis.workspace);document.getElementById('workspacePath').value=data.analysis.workspace;setAnalysisProgress(94,'Регистрирую проект');await registerCurrentProject(repo_url,data.analysis.workspace,data.analysis.detected_stack?.join(', ')||'unknown');}setAnalysisProgress(100,'Проект добавлен');closeAddProjectModal();}
+
 window.addEventListener('load', () => {
     setStatus('Запуск DevConsole runtime', 'running');
     appendLog('DevConsole runtime initialized...');
@@ -311,5 +361,6 @@ window.addEventListener('load', () => {
     loadDevices();
     loadProjects();
     loadRuntimeCommands();
+    renderApkArtifacts([], 'build/app/outputs/flutter-apk');
     appendLog('DevConsole workspace runtime готов');
 });
