@@ -1,6 +1,9 @@
 import json
 import os
+import signal
 import subprocess
+import time
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -12,6 +15,7 @@ from backend.runtime_logs import get_logs, add_log
 from backend.shell_runner import run_command
 
 router = APIRouter(prefix='/api/runtime', tags=['runtime'])
+ACTIVE_PROCESSES: dict[str, subprocess.Popen] = {}
 
 
 def _runtime_env_prefix() -> str:
@@ -19,14 +23,7 @@ def _runtime_env_prefix() -> str:
     flutter_home = os.getenv('FLUTTER_HOME') or f'{runtime_home}/flutter'
     android_home = os.getenv('ANDROID_HOME') or os.getenv('ANDROID_SDK_ROOT') or f'{runtime_home}/Android'
     pub_cache = os.getenv('PUB_CACHE') or f'{runtime_home}/.pub-cache'
-
-    return (
-        f'export HOME="{runtime_home}" '
-        f'PUB_CACHE="{pub_cache}" '
-        f'ANDROID_HOME="{android_home}" '
-        f'ANDROID_SDK_ROOT="{android_home}" '
-        f'PATH="{flutter_home}/bin:{android_home}/cmdline-tools/latest/bin:{android_home}/platform-tools:$PATH" && '
-    )
+    return f'export HOME="{runtime_home}" PUB_CACHE="{pub_cache}" ANDROID_HOME="{android_home}" ANDROID_SDK_ROOT="{android_home}" PATH="{flutter_home}/bin:{android_home}/cmdline-tools/latest/bin:{android_home}/platform-tools:$PATH" && '
 
 
 def _flutter(command: str) -> str:
@@ -38,6 +35,11 @@ class RuntimeCommandRequest(BaseModel):
     command: str
     device: str | None = None
     package_name: str | None = None
+
+
+class RuntimeStopRequest(BaseModel):
+    task_id: str | None = None
+    send_confirm: bool = True
 
 
 def _runtime_commands() -> dict[str, dict]:
@@ -74,6 +76,7 @@ def _event(payload: dict) -> str:
 
 
 def _stream_command(command: str, cwd: str, timeout: int):
+    task_id = uuid.uuid4().hex
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -81,25 +84,34 @@ def _stream_command(command: str, cwd: str, timeout: int):
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        stdin=subprocess.PIPE,
         bufsize=1,
+        preexec_fn=os.setsid,
     )
-
-    yield _event({'type': 'start', 'message': command})
+    ACTIVE_PROCESSES[task_id] = process
+    yield _event({'type': 'start', 'task_id': task_id, 'message': command})
+    started_at = time.time()
 
     try:
         assert process.stdout is not None
-        for line in iter(process.stdout.readline, ''):
-            if not line:
+        while True:
+            if time.time() - started_at > timeout:
+                yield _event({'type': 'error', 'task_id': task_id, 'message': 'Command timeout'})
                 break
-            yield _event({'type': 'line', 'message': line.rstrip()})
-
-        returncode = process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        returncode = -1
-        yield _event({'type': 'error', 'message': 'Command timeout'})
-
-    yield _event({'type': 'done', 'returncode': returncode})
+            line = process.stdout.readline()
+            if line:
+                yield _event({'type': 'line', 'task_id': task_id, 'message': line.rstrip()})
+                continue
+            if process.poll() is not None:
+                break
+            time.sleep(0.1)
+        returncode = process.poll()
+        if returncode is None:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            returncode = -1
+    finally:
+        ACTIVE_PROCESSES.pop(task_id, None)
+    yield _event({'type': 'done', 'task_id': task_id, 'returncode': returncode})
 
 
 @router.get('/logs')
@@ -109,13 +121,7 @@ async def runtime_logs():
 
 @router.get('/commands')
 async def runtime_commands():
-    return {
-        'success': True,
-        'commands': [
-            {'id': command_id, 'label': config['label'], 'needs_device': bool(config.get('device'))}
-            for command_id, config in _runtime_commands().items()
-        ],
-    }
+    return {'success': True, 'commands': [{'id': command_id, 'label': config['label'], 'needs_device': bool(config.get('device'))} for command_id, config in _runtime_commands().items()]}
 
 
 @router.post('/event')
@@ -131,14 +137,11 @@ async def runtime_command(payload: RuntimeCommandRequest):
     config = commands.get(payload.command)
     if not config:
         raise HTTPException(status_code=400, detail='Runtime command is not allowed')
-
     cwd = _workspace_cwd(payload.workspace)
     command = _with_device(config['command'], payload.device, bool(config.get('device')))
-
     add_log(f"Runtime command started: {config['label']}")
     result = run_command(command, cwd, timeout=int(config.get('timeout', 900)))
     add_log(f"Runtime command finished: {config['label']} (exit {result['returncode']})")
-
     return {'success': result['returncode'] == 0, 'command': payload.command, 'label': config['label'], 'result': result}
 
 
@@ -148,16 +151,37 @@ async def runtime_command_stream(payload: RuntimeCommandRequest):
     config = commands.get(payload.command)
     if not config:
         raise HTTPException(status_code=400, detail='Runtime command is not allowed')
-
     cwd = _workspace_cwd(payload.workspace)
     command = _with_device(config['command'], payload.device, bool(config.get('device')))
-
     add_log(f"Runtime stream started: {config['label']}")
+    return StreamingResponse(_stream_command(command, cwd, int(config.get('timeout', 900))), media_type='application/x-ndjson')
 
-    return StreamingResponse(
-        _stream_command(command, cwd, int(config.get('timeout', 900))),
-        media_type='application/x-ndjson',
-    )
+
+@router.post('/stop')
+async def runtime_stop(payload: RuntimeStopRequest):
+    targets = []
+    if payload.task_id:
+        process = ACTIVE_PROCESSES.get(payload.task_id)
+        if process:
+            targets.append((payload.task_id, process))
+    else:
+        targets = list(ACTIVE_PROCESSES.items())
+
+    stopped = []
+    for task_id, process in targets:
+        try:
+            if payload.send_confirm and process.stdin:
+                process.stdin.write('Y\n')
+                process.stdin.flush()
+                time.sleep(0.4)
+            if process.poll() is None:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            stopped.append(task_id)
+        except Exception as exc:
+            add_log(f'Runtime stop error: {exc}')
+
+    add_log(f'Runtime stop requested: {stopped}')
+    return {'success': True, 'stopped': stopped}
 
 
 @router.post('/install-latest-apk')
@@ -166,11 +190,9 @@ async def runtime_install_latest_apk(payload: RuntimeCommandRequest):
     apks = find_apks(cwd)
     if not apks:
         raise HTTPException(status_code=404, detail='APK not found. Build project first.')
-
     adb = f'{_runtime_env_prefix()}adb'
     if payload.device:
         adb = f'{_runtime_env_prefix()}adb -s {payload.device}'
-
     command = f'{adb} install -r "{apks[0]}"'
     add_log(f'Runtime APK install started: {apks[0]}')
     result = run_command(command, cwd, timeout=900)
@@ -182,12 +204,10 @@ async def runtime_install_latest_apk(payload: RuntimeCommandRequest):
 async def runtime_restart_app(payload: RuntimeCommandRequest):
     if not payload.package_name:
         raise HTTPException(status_code=400, detail='package_name is required')
-
     cwd = _workspace_cwd(payload.workspace)
     adb = f'{_runtime_env_prefix()}adb'
     if payload.device:
         adb = f'{_runtime_env_prefix()}adb -s {payload.device}'
-
     command = f'{adb} shell monkey -p {payload.package_name} 1'
     add_log(f'Runtime app restart requested: {payload.package_name}')
     result = run_command(command, cwd, timeout=120)
