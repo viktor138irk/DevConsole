@@ -14,6 +14,7 @@ from backend.config_store import (
     has_openai_key,
     set_setting,
 )
+from backend.flutter_manual_api import router as flutter_manual_router
 from backend.openai_client import OpenAIConfigurationError, ask_ai
 from backend.project_analyzer import analyze_github_project
 from backend.projects_api import router as projects_router
@@ -38,6 +39,7 @@ app.add_middleware(
 app.include_router(workspace_router)
 app.include_router(projects_router)
 app.include_router(runtime_router)
+app.include_router(flutter_manual_router)
 
 if FRONTEND_DIR.exists():
     app.mount('/assets', StaticFiles(directory=FRONTEND_DIR / 'assets'), name='assets')
