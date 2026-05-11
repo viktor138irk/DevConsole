@@ -7,6 +7,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from urllib.parse import urlparse
 
+from backend.config_store import get_github_token, get_github_username
+
 DATA_DIR = Path(os.getenv('DEVCONSOLE_DATA_DIR', '/var/lib/devconsole'))
 PROJECTS_DIR = DATA_DIR / 'projects'
 
@@ -41,10 +43,30 @@ def _slug_from_repo_url(repo_url: str) -> str:
     return slug or 'project'
 
 
+
+def _build_authenticated_repo_url(repo_url: str) -> str:
+    username = get_github_username().strip()
+    token = (get_github_token() or '').strip()
+
+    if not username or not token:
+        return repo_url
+
+    if 'github.com' not in repo_url:
+        return repo_url
+
+    return repo_url.replace(
+        'https://',
+        f'https://{username}:{token}@',
+        1,
+    )
+
+
 def clone_or_update_project(repo_url: str) -> Path:
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     slug = _slug_from_repo_url(repo_url)
     workspace = PROJECTS_DIR / slug
+
+    auth_repo_url = _build_authenticated_repo_url(repo_url)
 
     if (workspace / '.git').exists():
         subprocess.run(['git', '-C', str(workspace), 'fetch', '--all'], check=True)
@@ -52,7 +74,7 @@ def clone_or_update_project(repo_url: str) -> Path:
     else:
         if workspace.exists():
             shutil.rmtree(workspace)
-        subprocess.run(['git', 'clone', repo_url, str(workspace)], check=True)
+        subprocess.run(['git', 'clone', auth_repo_url, str(workspace)], check=True)
 
     return workspace
 
