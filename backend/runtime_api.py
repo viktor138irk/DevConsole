@@ -11,11 +11,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.android_tools import find_apks
+from backend.ota_publish import publish_project_ota
 from backend.runtime_logs import get_logs, add_log
 from backend.shell_runner import run_command
 
 router = APIRouter(prefix='/api/runtime', tags=['runtime'])
 ACTIVE_PROCESSES: dict[str, subprocess.Popen] = {}
+
+PUBLISH_AFTER_COMMANDS = {'flutter_build_apk', 'flutter_run_profile'}
 
 
 def _runtime_env_prefix() -> str:
@@ -75,7 +78,21 @@ def _event(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False) + '\n'
 
 
-def _stream_command(command: str, cwd: str, timeout: int):
+def _publish_events(workspace: str):
+    yield _event({'type': 'line', 'message': 'OTA publish: preparing latest.json and APK upload'})
+    try:
+        result = publish_project_ota(workspace)
+        if result.get('success'):
+            yield _event({'type': 'line', 'message': 'OTA publish: completed'})
+            yield _event({'type': 'publish', 'success': True, 'result': result})
+        else:
+            yield _event({'type': 'line', 'message': f"OTA publish skipped: {result.get('message')}"})
+            yield _event({'type': 'publish', 'success': False, 'result': result})
+    except Exception as exc:
+        yield _event({'type': 'error', 'message': f'OTA publish failed: {exc}'})
+
+
+def _stream_command(command_id: str, command: str, cwd: str, timeout: int):
     task_id = uuid.uuid4().hex
     process = subprocess.Popen(
         command,
@@ -111,6 +128,10 @@ def _stream_command(command: str, cwd: str, timeout: int):
             returncode = -1
     finally:
         ACTIVE_PROCESSES.pop(task_id, None)
+
+    if returncode == 0 and command_id in PUBLISH_AFTER_COMMANDS:
+        yield from _publish_events(cwd)
+
     yield _event({'type': 'done', 'task_id': task_id, 'returncode': returncode})
 
 
@@ -142,6 +163,8 @@ async def runtime_command(payload: RuntimeCommandRequest):
     add_log(f"Runtime command started: {config['label']}")
     result = run_command(command, cwd, timeout=int(config.get('timeout', 900)))
     add_log(f"Runtime command finished: {config['label']} (exit {result['returncode']})")
+    if result['returncode'] == 0 and payload.command in PUBLISH_AFTER_COMMANDS:
+        result['ota_publish'] = publish_project_ota(cwd)
     return {'success': result['returncode'] == 0, 'command': payload.command, 'label': config['label'], 'result': result}
 
 
@@ -154,7 +177,7 @@ async def runtime_command_stream(payload: RuntimeCommandRequest):
     cwd = _workspace_cwd(payload.workspace)
     command = _with_device(config['command'], payload.device, bool(config.get('device')))
     add_log(f"Runtime stream started: {config['label']}")
-    return StreamingResponse(_stream_command(command, cwd, int(config.get('timeout', 900))), media_type='application/x-ndjson')
+    return StreamingResponse(_stream_command(payload.command, command, cwd, int(config.get('timeout', 900))), media_type='application/x-ndjson')
 
 
 @router.post('/stop')
@@ -166,7 +189,6 @@ async def runtime_stop(payload: RuntimeStopRequest):
             targets.append((payload.task_id, process))
     else:
         targets = list(ACTIVE_PROCESSES.items())
-
     stopped = []
     for task_id, process in targets:
         try:
@@ -179,7 +201,6 @@ async def runtime_stop(payload: RuntimeStopRequest):
             stopped.append(task_id)
         except Exception as exc:
             add_log(f'Runtime stop error: {exc}')
-
     add_log(f'Runtime stop requested: {stopped}')
     return {'success': True, 'stopped': stopped}
 
