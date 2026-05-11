@@ -143,6 +143,93 @@ async function streamRuntimeCommand(command, title, progress = 50) {
     return ok;
 }
 
+async function streamFlutterBatch(commands) {
+    const workspace = getWorkspacePath();
+    if (!workspace) { setError('Workspace не выбран'); return false; }
+    if (!commands || !commands.trim()) { setError('Команда Flutter не указана'); return false; }
+    clearRuntimeOutput();
+    setTaskProgress(5, 'Flutter batch запущен', true);
+    appendLog('▶ Flutter batch live');
+    appendRuntimeLog('▶ Flutter batch live');
+    const response = await fetch('/api/runtime/flutter-batch-stream', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({workspace, commands, device: getSelectedDevice(), stop_on_error: true})
+    });
+    if (!response.ok || !response.body) {
+        const text = await response.text().catch(() => '');
+        setError('Не удалось открыть Flutter batch stream');
+        appendRuntimeLog(`❌ Flutter batch stream error ${response.status}: ${text}`);
+        return false;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let ok = true;
+    while (true) {
+        const {value, done} = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, {stream: true});
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const raw of lines) {
+            if (!raw.trim()) continue;
+            let event;
+            try { event = JSON.parse(raw); } catch (_) { appendRuntimeLog(raw); continue; }
+            if (event.type === 'batch_start') { appendRuntimeLog(event.message); setTaskProgress(10, event.message, true); }
+            else if (event.type === 'line') { appendRuntimeLog(event.message); updateProgressFromLine(event.message); }
+            else if (event.type === 'start') { appendRuntimeLog(`$ ${event.message}`); setTaskProgress(20, event.message, true); }
+            else if (event.type === 'error') { ok = false; appendRuntimeLog(`❌ ${event.message}`); setError(event.message); }
+            else if (event.type === 'done') { appendRuntimeLog(Number(event.returncode) === 0 ? `✅ ${event.message}` : `❌ ${event.message} exit ${event.returncode}`); }
+            else if (event.type === 'batch_done') { ok = Boolean(event.success); appendRuntimeLog(ok ? '✅ Flutter batch completed' : '❌ Flutter batch failed'); }
+        }
+    }
+    setTaskProgress(100, ok ? 'Flutter batch завершён' : 'Flutter batch завершён с ошибкой', false);
+    if (!ok) setStatus('Flutter batch error', 'error');
+    return ok;
+}
+
+function runFlutterCommandBatch() {
+    const input = document.getElementById('flutterCommandInput');
+    streamFlutterBatch(input ? input.value : '');
+}
+
+function setFlutterPreset(value) {
+    const input = document.getElementById('flutterCommandInput');
+    if (input) input.value = value;
+}
+
+function initFlutterConsole() {
+    if (document.getElementById('flutterConsolePanel')) return;
+    const logsWrap = document.querySelector('.logs-wrap');
+    const logs = document.getElementById('logs');
+    if (!logsWrap || !logs) return;
+    const panel = document.createElement('div');
+    panel.id = 'flutterConsolePanel';
+    panel.style.cssText = 'padding:12px;border-top:1px solid #2a2f3a;background:#10141b;flex:0 0 auto;';
+    panel.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <strong>Flutter console</strong><span class="note">Ctrl+Enter запуск</span>
+        </div>
+        <textarea id="flutterCommandInput" style="min-height:96px;font-family:monospace;font-size:12px" placeholder="flutter clean&#10;flutter pub get&#10;flutter analyze&#10;flutter run --profile"></textarea>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <button class="mini-btn" onclick="runFlutterCommandBatch()">Run Batch</button>
+            <button class="mini-btn muted" onclick="setFlutterPreset('flutter clean\\nflutter pub get\\nflutter analyze')">check</button>
+            <button class="mini-btn muted" onclick="setFlutterPreset('flutter clean\\nflutter pub get\\nflutter build apk --debug')">debug APK</button>
+            <button class="mini-btn muted" onclick="setFlutterPreset('flutter clean\\nflutter pub get\\nflutter run --profile')">run profile</button>
+        </div>`;
+    logsWrap.insertBefore(panel, logs.nextSibling);
+    const input = document.getElementById('flutterCommandInput');
+    if (input) {
+        input.addEventListener('keydown', event => {
+            if (event.ctrlKey && event.key === 'Enter') {
+                event.preventDefault();
+                runFlutterCommandBatch();
+            }
+        });
+    }
+}
+
 function getSelectedDevice() { return selectedDeviceSerial; }
 function getWorkspacePath() { const input = document.getElementById('workspacePath'); return input ? input.value.trim() : ''; }
 function selectDevice(serial) {
@@ -307,6 +394,7 @@ async function loadDevices() {
 window.addEventListener('load', () => {
     setStatus('Запуск DevConsole runtime', 'running');
     appendLog('DevConsole runtime initialized...');
+    initFlutterConsole();
     loadSystemStatus();
     loadDevices();
     loadProjects();
