@@ -1,8 +1,83 @@
-from fastapi import APIRouter
+from pathlib import Path
 
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from backend.android_tools import find_apks
 from backend.runtime_logs import get_logs, add_log
+from backend.shell_runner import run_command
 
 router = APIRouter(prefix='/api/runtime', tags=['runtime'])
+
+
+class RuntimeCommandRequest(BaseModel):
+    workspace: str
+    command: str
+    device: str | None = None
+    package_name: str | None = None
+
+
+RUNTIME_COMMANDS: dict[str, dict] = {
+    'git_pull': {
+        'label': 'Git Pull',
+        'command': 'git pull',
+        'timeout': 600,
+    },
+    'flutter_clean': {
+        'label': 'Flutter Clean',
+        'command': 'flutter clean',
+        'timeout': 900,
+    },
+    'flutter_pub_get': {
+        'label': 'Flutter Pub Get',
+        'command': 'flutter pub get',
+        'timeout': 900,
+    },
+    'flutter_build_apk': {
+        'label': 'Flutter Build APK',
+        'command': 'flutter build apk --release',
+        'timeout': 3600,
+    },
+    'flutter_run_profile': {
+        'label': 'Flutter Run Profile',
+        'command': 'flutter run --profile',
+        'timeout': 1800,
+        'device': True,
+    },
+    'adb_reconnect': {
+        'label': 'ADB Reconnect',
+        'command': 'adb reconnect',
+        'timeout': 120,
+        'root_cwd': True,
+    },
+    'adb_logcat': {
+        'label': 'ADB Logcat Snapshot',
+        'command': 'adb logcat -d -t 300',
+        'timeout': 120,
+        'root_cwd': True,
+        'device': True,
+    },
+}
+
+
+def _workspace_cwd(workspace: str) -> str:
+    path = Path(workspace).resolve()
+    if not path.exists():
+        raise HTTPException(status_code=400, detail='Workspace path does not exist')
+    return path.as_posix()
+
+
+def _with_device(command: str, device: str | None) -> str:
+    if not device:
+        return command
+
+    if command.startswith('adb '):
+        return command.replace('adb ', f'adb -s {device} ', 1)
+
+    if command.startswith('flutter ') and ' -d ' not in command:
+        return f'{command} -d {device}'
+
+    return command
 
 
 @router.get('/logs')
@@ -10,6 +85,21 @@ async def runtime_logs():
     return {
         'success': True,
         'logs': get_logs(),
+    }
+
+
+@router.get('/commands')
+async def runtime_commands():
+    return {
+        'success': True,
+        'commands': [
+            {
+                'id': command_id,
+                'label': config['label'],
+                'needs_device': bool(config.get('device')),
+            }
+            for command_id, config in RUNTIME_COMMANDS.items()
+        ],
     }
 
 
@@ -22,4 +112,85 @@ async def runtime_event(payload: dict):
     return {
         'success': True,
         'message': message,
+    }
+
+
+@router.post('/command')
+async def runtime_command(payload: RuntimeCommandRequest):
+    config = RUNTIME_COMMANDS.get(payload.command)
+
+    if not config:
+        raise HTTPException(status_code=400, detail='Runtime command is not allowed')
+
+    cwd = _workspace_cwd(payload.workspace)
+    command = _with_device(config['command'], payload.device)
+
+    add_log(f"Runtime command started: {config['label']}")
+
+    result = run_command(
+        command,
+        cwd,
+        timeout=int(config.get('timeout', 900)),
+    )
+
+    add_log(
+        f"Runtime command finished: {config['label']} "
+        f"(exit {result['returncode']})"
+    )
+
+    return {
+        'success': result['returncode'] == 0,
+        'command': payload.command,
+        'label': config['label'],
+        'result': result,
+    }
+
+
+@router.post('/install-latest-apk')
+async def runtime_install_latest_apk(payload: RuntimeCommandRequest):
+    cwd = _workspace_cwd(payload.workspace)
+    apks = find_apks(cwd)
+
+    if not apks:
+        raise HTTPException(status_code=404, detail='APK not found. Build project first.')
+
+    adb = 'adb'
+    if payload.device:
+        adb = f'adb -s {payload.device}'
+
+    command = f'{adb} install -r "{apks[0]}"'
+
+    add_log(f'Runtime APK install started: {apks[0]}')
+    result = run_command(command, cwd, timeout=900)
+    add_log(f"Runtime APK install finished (exit {result['returncode']})")
+
+    return {
+        'success': result['returncode'] == 0,
+        'apk': apks[0],
+        'device': payload.device,
+        'result': result,
+    }
+
+
+@router.post('/restart-app')
+async def runtime_restart_app(payload: RuntimeCommandRequest):
+    if not payload.package_name:
+        raise HTTPException(status_code=400, detail='package_name is required')
+
+    cwd = _workspace_cwd(payload.workspace)
+    adb = 'adb'
+    if payload.device:
+        adb = f'adb -s {payload.device}'
+
+    command = f'{adb} shell monkey -p {payload.package_name} 1'
+
+    add_log(f'Runtime app restart requested: {payload.package_name}')
+    result = run_command(command, cwd, timeout=120)
+    add_log(f"Runtime app restart finished (exit {result['returncode']})")
+
+    return {
+        'success': result['returncode'] == 0,
+        'package_name': payload.package_name,
+        'device': payload.device,
+        'result': result,
     }
