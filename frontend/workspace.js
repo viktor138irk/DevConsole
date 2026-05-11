@@ -22,7 +22,13 @@ async function workspaceApi(url, payload = {}, method = 'POST') {
         body: method === 'GET' ? undefined : JSON.stringify(payload)
     });
 
-    return await response.json();
+    const data = await response.json().catch(() => ({success: false, detail: 'Пустой ответ сервера'}));
+
+    if (!response.ok) {
+        appendLog(`Ошибка API ${response.status}: ${data.detail || 'unknown error'}`);
+    }
+
+    return data;
 }
 
 function getSelectedDevice() {
@@ -33,6 +39,50 @@ function getSelectedDevice() {
     }
 
     return select.value || null;
+}
+
+async function loadSystemStatus() {
+    const data = await workspaceApi('/api/system/status', {}, 'GET');
+    const status = document.getElementById('githubStatus');
+    const username = document.getElementById('githubUsername');
+
+    if (!status || !username) {
+        return;
+    }
+
+    if (data.github?.username) {
+        username.value = data.github.username;
+    }
+
+    status.innerText = data.github?.token_set
+        ? `GitHub: ${data.github.username || 'user'} / token сохранён`
+        : 'GitHub token не сохранён';
+}
+
+async function saveGitHubSettings() {
+    const username = document.getElementById('githubUsername').value.trim();
+    const token = document.getElementById('githubToken').value.trim();
+
+    if (!username) {
+        appendLog('Укажите GitHub username');
+        return;
+    }
+
+    if (!token) {
+        appendLog('Укажите GitHub token');
+        return;
+    }
+
+    const data = await workspaceApi('/api/settings/github', {
+        username,
+        token
+    });
+
+    if (data.success) {
+        document.getElementById('githubToken').value = '';
+        appendLog('GitHub доступ сохранён');
+        await loadSystemStatus();
+    }
 }
 
 async function loadRuntimeCommands() {
@@ -79,7 +129,7 @@ async function runRuntimeCommand(command) {
 
     appendLog(data.success
         ? `Команда выполнена: ${data.label}`
-        : `Ошибка runtime команды: ${data.label}`
+        : `Ошибка runtime команды: ${data.label || command}`
     );
 }
 
@@ -159,7 +209,7 @@ function openProject(workspace) {
 }
 
 async function registerCurrentProject(repoUrl, workspace, stack = 'unknown') {
-    const name = repoUrl.split('/').pop();
+    const name = repoUrl.split('/').pop().replace('.git', '');
 
     await workspaceApi('/api/projects/register', {
         name,
@@ -175,6 +225,11 @@ async function registerCurrentProject(repoUrl, workspace, stack = 'unknown') {
 
 async function loadWorkspaceTree() {
     const workspace = document.getElementById('workspacePath').value;
+
+    if (!workspace) {
+        appendLog('Workspace path пустой');
+        return;
+    }
 
     appendLog(`Загрузка workspace: ${workspace}`);
 
@@ -278,6 +333,7 @@ async function loadDevices() {
 }
 
 window.addEventListener('load', () => {
+    loadSystemStatus();
     loadDevices();
     loadProjects();
     loadRuntimeCommands();
