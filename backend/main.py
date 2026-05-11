@@ -97,7 +97,12 @@ def _apk_meta(path: str, workspace: str) -> dict:
 
 @app.get('/')
 async def root():
-    return FileResponse(FRONTEND_DIR / 'index.html')
+    return FileResponse(FRONTEND_DIR / 'runtime.html')
+
+
+@app.get('/runtime')
+async def runtime_page():
+    return FileResponse(FRONTEND_DIR / 'runtime.html')
 
 
 @app.get('/workspace.js')
