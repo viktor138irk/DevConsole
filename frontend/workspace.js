@@ -1,3 +1,5 @@
+let currentBusyTask = null;
+
 function appendLog(message) {
     const logs = document.getElementById('logs');
 
@@ -9,6 +11,61 @@ function appendLog(message) {
 
     logs.innerText += `\n[${time}] ${message}`;
     logs.scrollTop = logs.scrollHeight;
+}
+
+function setStatus(message, state = 'idle') {
+    const status = document.getElementById('runtimeStatus');
+    const dot = document.getElementById('runtimeStatusDot');
+
+    if (status) {
+        status.innerText = message;
+    }
+
+    if (dot) {
+        dot.className = `status-dot ${state}`;
+    }
+}
+
+function setTaskProgress(percent, message, running = true) {
+    const wrap = document.getElementById('taskProgressWrap');
+    const bar = document.getElementById('taskProgressBar');
+    const label = document.getElementById('taskProgressLabel');
+
+    if (wrap) {
+        wrap.style.display = 'block';
+    }
+
+    if (bar) {
+        bar.style.width = `${percent}%`;
+    }
+
+    if (label) {
+        label.innerText = `${percent}% — ${message}`;
+    }
+
+    setStatus(message, running ? 'running' : 'done');
+}
+
+function setBusy(message) {
+    currentBusyTask = message;
+    setStatus(message, 'running');
+    setTaskProgress(5, message, true);
+}
+
+function setDone(message) {
+    currentBusyTask = null;
+    setTaskProgress(100, message, false);
+    appendLog(`✅ ${message}`);
+}
+
+function setError(message) {
+    currentBusyTask = null;
+    const label = document.getElementById('taskProgressLabel');
+    if (label) {
+        label.innerText = `Ошибка — ${message}`;
+    }
+    setStatus(message, 'error');
+    appendLog(`❌ ${message}`);
 }
 
 async function workspaceApi(url, payload = {}, method = 'POST') {
@@ -47,21 +104,22 @@ function getWorkspacePath() {
 }
 
 async function loadSystemStatus() {
+    setStatus('Проверяю состояние DevConsole', 'running');
     const data = await workspaceApi('/api/system/status', {}, 'GET');
     const status = document.getElementById('githubStatus');
     const username = document.getElementById('githubUsername');
 
-    if (!status || !username) {
-        return;
+    if (status && username) {
+        if (data.github?.username) {
+            username.value = data.github.username;
+        }
+
+        status.innerText = data.github?.token_set
+            ? `GitHub: ${data.github.username || 'user'} / доступ сохранён`
+            : 'GitHub доступ не сохранён';
     }
 
-    if (data.github?.username) {
-        username.value = data.github.username;
-    }
-
-    status.innerText = data.github?.token_set
-        ? `GitHub: ${data.github.username || 'user'} / token сохранён`
-        : 'GitHub token не сохранён';
+    setStatus('DevConsole готов', 'done');
 }
 
 async function saveGitHubSettings() {
@@ -69,14 +127,16 @@ async function saveGitHubSettings() {
     const token = document.getElementById('githubToken').value.trim();
 
     if (!username) {
-        appendLog('Укажите GitHub username');
+        setError('Укажите GitHub username');
         return;
     }
 
     if (!token) {
-        appendLog('Укажите GitHub token');
+        setError('Укажите GitHub credential');
         return;
     }
+
+    setBusy('Сохраняю GitHub доступ');
 
     const data = await workspaceApi('/api/settings/github', {
         username,
@@ -85,8 +145,10 @@ async function saveGitHubSettings() {
 
     if (data.success) {
         document.getElementById('githubToken').value = '';
-        appendLog('GitHub доступ сохранён');
         await loadSystemStatus();
+        setDone('GitHub доступ сохранён');
+    } else {
+        setError('Не удалось сохранить GitHub доступ');
     }
 }
 
@@ -108,17 +170,20 @@ function renderGroupedRuntimeButtons() {
 
 async function loadRuntimeCommands() {
     renderGroupedRuntimeButtons();
+    setStatus('Runtime сценарии готовы', 'done');
 }
 
-async function executeRuntimeCommand(command, title) {
+async function executeRuntimeCommand(command, title, progress = 50) {
     const workspace = getWorkspacePath();
 
     if (!workspace) {
-        appendLog('Workspace не выбран');
+        setError('Workspace не выбран');
         return false;
     }
 
-    appendLog(`▶ ${title || command}`);
+    const taskTitle = title || command;
+    setTaskProgress(progress, taskTitle, true);
+    appendLog(`▶ ${taskTitle}`);
 
     const data = await workspaceApi('/api/runtime/command', {
         workspace,
@@ -139,6 +204,10 @@ async function executeRuntimeCommand(command, title) {
         : `❌ Ошибка: ${data.label || command}`
     );
 
+    if (!data.success) {
+        setError(`Ошибка: ${data.label || command}`);
+    }
+
     return Boolean(data.success);
 }
 
@@ -146,51 +215,55 @@ async function runRuntimeScenario(scenario) {
     const workspace = getWorkspacePath();
 
     if (!workspace) {
-        appendLog('Workspace не выбран');
+        setError('Workspace не выбран');
         return;
     }
 
     if (scenario === 'check') {
+        setBusy('Проверка проекта');
         appendLog('=== Проверка проекта: git pull + flutter pub get ===');
-        if (!await executeRuntimeCommand('git_pull', 'Git Pull')) return;
-        await executeRuntimeCommand('flutter_pub_get', 'Flutter Pub Get');
-        appendLog('=== Проверка завершена ===');
+        if (!await executeRuntimeCommand('git_pull', 'Git Pull', 25)) return;
+        if (!await executeRuntimeCommand('flutter_pub_get', 'Flutter Pub Get', 70)) return;
+        setDone('Проверка завершена');
         return;
     }
 
     if (scenario === 'run_profile') {
-        appendLog('=== Запуск на телефоне в profile режиме ===');
         if (!getSelectedDevice()) {
-            appendLog('Устройство не выбрано');
+            setError('Устройство не выбрано');
             return;
         }
-        if (!await executeRuntimeCommand('flutter_pub_get', 'Подготовка зависимостей')) return;
-        await executeRuntimeCommand('flutter_run_profile', 'Flutter Run --profile');
-        appendLog('=== Запуск завершён ===');
+        setBusy('Запуск на телефоне');
+        appendLog('=== Запуск на телефоне в profile режиме ===');
+        if (!await executeRuntimeCommand('flutter_pub_get', 'Подготовка зависимостей', 30)) return;
+        if (!await executeRuntimeCommand('flutter_run_profile', 'Flutter Run --profile', 75)) return;
+        setDone('Запуск завершён');
         return;
     }
 
     if (scenario === 'build') {
+        setBusy('Сборка APK');
         appendLog('=== Сборка APK: clean + pub get + release build ===');
-        if (!await executeRuntimeCommand('flutter_clean', 'Flutter Clean')) return;
-        if (!await executeRuntimeCommand('flutter_pub_get', 'Flutter Pub Get')) return;
-        await executeRuntimeCommand('flutter_build_apk', 'Flutter Build APK');
-        appendLog('=== Сборка завершена ===');
+        if (!await executeRuntimeCommand('flutter_clean', 'Flutter Clean', 20)) return;
+        if (!await executeRuntimeCommand('flutter_pub_get', 'Flutter Pub Get', 45)) return;
+        if (!await executeRuntimeCommand('flutter_build_apk', 'Flutter Build APK', 80)) return;
+        setDone('Сборка APK завершена');
         return;
     }
 
     if (scenario === 'install') {
+        setBusy('Установка APK');
         appendLog('=== Установка последнего APK на устройство ===');
         await installLatestApk();
-        appendLog('=== Установка завершена ===');
         return;
     }
 
     if (scenario === 'diagnostics') {
+        setBusy('Диагностика Android runtime');
         appendLog('=== Диагностика Android runtime ===');
-        await executeRuntimeCommand('adb_reconnect', 'ADB Reconnect');
-        await executeRuntimeCommand('adb_logcat', 'ADB Logcat Snapshot');
-        appendLog('=== Диагностика завершена ===');
+        if (!await executeRuntimeCommand('adb_reconnect', 'ADB Reconnect', 40)) return;
+        if (!await executeRuntimeCommand('adb_logcat', 'ADB Logcat Snapshot', 80)) return;
+        setDone('Диагностика завершена');
     }
 }
 
@@ -200,6 +273,8 @@ async function runRuntimeCommand(command) {
 
 async function installLatestApk() {
     const workspace = getWorkspacePath();
+
+    setTaskProgress(40, 'Отправляю APK на устройство', true);
 
     const data = await workspaceApi('/api/runtime/install-latest-apk', {
         workspace,
@@ -214,7 +289,11 @@ async function installLatestApk() {
         appendLog(data.result.stderr);
     }
 
-    appendLog(data.success ? '✅ APK установлен' : '❌ Ошибка установки APK');
+    if (data.success) {
+        setDone('APK установлен');
+    } else {
+        setError('Ошибка установки APK');
+    }
 }
 
 async function restartCurrentApp() {
@@ -222,9 +301,11 @@ async function restartCurrentApp() {
     const packageName = document.getElementById('packageName').value;
 
     if (!packageName) {
-        appendLog('Укажите package name');
+        setError('Укажите package name');
         return;
     }
+
+    setBusy('Перезапускаю приложение');
 
     const data = await workspaceApi('/api/runtime/restart-app', {
         workspace,
@@ -239,6 +320,12 @@ async function restartCurrentApp() {
     if (data.result?.stderr) {
         appendLog(data.result.stderr);
     }
+
+    if (data.success) {
+        setDone('Приложение перезапущено');
+    } else {
+        setError('Ошибка перезапуска приложения');
+    }
 }
 
 async function loadProjects() {
@@ -248,6 +335,7 @@ async function loadProjects() {
         return;
     }
 
+    setStatus('Загружаю список проектов', 'running');
     appendLog('Загрузка списка проектов');
 
     const data = await workspaceApi('/api/projects/list', {}, 'GET');
@@ -256,27 +344,34 @@ async function loadProjects() {
 
     if (projects.length === 0) {
         container.innerHTML = 'Проекты отсутствуют';
+        setStatus('Проекты отсутствуют', 'idle');
         return;
     }
 
     container.innerHTML = projects.map(project => `
-        <div style="padding:10px;margin-bottom:10px;background:#1d2430;border-radius:10px;cursor:pointer" onclick="openProject('${project.workspace}')">
+        <div class="project-card" onclick="openProject('${project.workspace}', '${project.name || 'project'}')">
             <strong>${project.name}</strong><br>
-            <small>${project.stack || 'unknown stack'}</small>
+            <small>${project.stack || 'unknown stack'}</small><br>
+            <small>${project.workspace}</small>
         </div>
     `).join('');
+
+    setStatus(`Проекты загружены: ${projects.length}`, 'done');
 }
 
-function openProject(workspace) {
+function openProject(workspace, name = 'project') {
     document.getElementById('workspacePath').value = workspace;
 
     appendLog(`Открытие проекта: ${workspace}`);
-
-    loadWorkspaceTree();
+    setTaskProgress(100, `Проект выбран: ${name}`, false);
+    setStatus(`Проект готов: ${name}`, 'done');
+    appendLog(`✅ Workspace готов к runtime-командам: ${workspace}`);
 }
 
 async function registerCurrentProject(repoUrl, workspace, stack = 'unknown') {
     const name = repoUrl.split('/').pop().replace('.git', '');
+
+    setTaskProgress(90, `Регистрирую проект: ${name}`, true);
 
     await workspaceApi('/api/projects/register', {
         name,
@@ -294,71 +389,15 @@ async function loadWorkspaceTree() {
     const workspace = getWorkspacePath();
 
     if (!workspace) {
-        appendLog('Workspace path пустой');
+        setError('Workspace path пустой');
         return;
     }
 
-    appendLog(`Загрузка workspace: ${workspace}`);
-
-    const data = await workspaceApi('/api/files/tree', {
-        path: workspace
-    });
-
-    renderTree(data.tree || []);
-}
-
-function renderTree(tree, level = 0) {
-    const container = document.getElementById('fileTree');
-
-    if (level === 0) {
-        container.innerHTML = '';
-    }
-
-    tree.forEach(node => {
-        const item = document.createElement('div');
-
-        item.className = 'tree-node';
-        item.style.paddingLeft = `${level * 16}px`;
-
-        if (node.type === 'directory') {
-            item.innerHTML = `📁 ${node.name}`;
-            container.appendChild(item);
-
-            renderTree(node.children || [], level + 1);
-        } else {
-            item.innerHTML = `📄 ${node.name}`;
-            item.onclick = () => openFile(node.path);
-            container.appendChild(item);
-        }
-    });
-}
-
-async function openFile(path) {
-    appendLog(`Открытие файла: ${path}`);
-
-    const data = await workspaceApi('/api/files/read', {
-        path
-    });
-
-    document.getElementById('editorPath').innerText = path;
-    document.getElementById('editor').value = data.content || '';
-}
-
-async function saveCurrentFile() {
-    const path = document.getElementById('editorPath').innerText;
-    const content = document.getElementById('editor').value;
-
-    appendLog(`Сохранение файла: ${path}`);
-
-    const data = await workspaceApi('/api/files/save', {
-        path,
-        content
-    });
-
-    appendLog(data.success ? 'Файл успешно сохранен' : 'Ошибка сохранения файла');
+    setDone(`Workspace выбран: ${workspace}`);
 }
 
 async function loadDevices() {
+    setStatus('Ищу Android устройства', 'running');
     appendLog('Обновление списка Android устройств');
 
     const data = await workspaceApi('/api/android/devices');
@@ -379,6 +418,7 @@ async function loadDevices() {
     if (devices.length === 0) {
         container.innerHTML = 'Устройства не подключены';
         select.innerHTML = '<option value="">Нет устройств</option>';
+        setStatus('Android устройства не подключены', 'idle');
         return;
     }
 
@@ -397,9 +437,12 @@ async function loadDevices() {
 
         return `<option value="${id}">${id}</option>`;
     }).join('');
+
+    setStatus(`Android устройства найдены: ${devices.length}`, 'done');
 }
 
 window.addEventListener('load', () => {
+    setStatus('Запуск DevConsole runtime', 'running');
     loadSystemStatus();
     loadDevices();
     loadProjects();
