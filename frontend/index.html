@@ -1,211 +1,67 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DevConsole</title>
-    <link rel="stylesheet" href="/assets/style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DevConsole</title>
+<style>
+body{margin:0;background:#0f1115;color:#fff;font-family:Arial,sans-serif}
+.layout{display:flex;height:100vh}
+.sidebar{width:260px;background:#171a21;padding:20px;border-right:1px solid #2a2f3a;overflow:auto}
+.workspace{flex:1;display:flex;flex-direction:column}
+.topbar{padding:10px;background:#171a21;border-bottom:1px solid #2a2f3a;display:flex;gap:10px}
+.workspace-body{flex:1;display:flex;overflow:hidden}
+.file-tree{width:320px;background:#13161c;border-right:1px solid #2a2f3a;overflow:auto;padding:10px}
+.editor-panel{flex:1;display:flex;flex-direction:column}
+.editor-header{padding:10px;background:#171a21;border-bottom:1px solid #2a2f3a;display:flex;justify-content:space-between}
+textarea{flex:1;background:#0f1115;color:#fff;border:none;padding:16px;font-family:monospace;font-size:14px;outline:none;resize:none}
+button{background:#2563eb;color:#fff;border:none;padding:10px 14px;border-radius:8px;cursor:pointer}
+input{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px;border-radius:8px;flex:1}
+.tree-node{padding:6px;border-radius:6px;cursor:pointer}.tree-node:hover{background:#1d2430}.logs{height:180px;background:#0b0d11;border-top:1px solid #2a2f3a;padding:10px;overflow:auto;font-family:monospace;font-size:12px}
+</style>
 </head>
 <body>
 <div class="layout">
-    <aside class="sidebar">
-        <div class="logo">
-            <h1>DevConsole</h1>
-            <span>AI-среда разработки</span>
-        </div>
-
-        <nav>
-            <a href="#workspace">Проекты</a>
-            <a href="#android">Android устройства</a>
-            <a href="#build">Сборка и установка</a>
-            <a href="#prompts">AI помощник</a>
-            <a href="#settings">Настройки</a>
-        </nav>
-    </aside>
-
-    <main class="content">
-        <section class="card" id="workspace">
-            <h2>Рабочее пространство проекта</h2>
-
-            <input type="text" id="repoUrl" placeholder="Ссылка GitHub репозитория">
-
-            <div class="button-row">
-                <button onclick="analyzeProject()">Анализ проекта</button>
-                <button onclick="installDependencies()">Установить зависимости</button>
-            </div>
-
-            <pre id="projectResult"></pre>
-        </section>
-
-        <section class="card" id="android">
-            <h2>Менеджер Android устройств</h2>
-
-            <div class="button-row">
-                <button onclick="loadDevices()">Обновить список устройств</button>
-            </div>
-
-            <div id="devices"></div>
-        </section>
-
-        <section class="card" id="build">
-            <h2>Сборка и установка APK</h2>
-
-            <input type="text" id="workspacePath" placeholder="Путь рабочего пространства проекта">
-
-            <div class="button-row">
-                <button onclick="buildApk()">Собрать APK</button>
-                <button onclick="installApk()">Установить APK</button>
-            </div>
-
-            <pre id="buildResult"></pre>
-        </section>
-
-        <section class="card" id="prompts">
-            <h2>AI помощник</h2>
-
-            <textarea id="promptInput" placeholder="Опиши ошибку, задачу или генерацию кода..."></textarea>
-
-            <button onclick="runPrompt()">Запустить AI задачу</button>
-
-            <pre id="promptResult"></pre>
-        </section>
-
-        <section class="card" id="settings">
-            <h2>Настройки OpenAI</h2>
-
-            <input type="password" id="apiKey" placeholder="OpenAI API Key">
-            <input type="text" id="model" value="gpt-5" placeholder="Модель">
-
-            <button onclick="saveSettings()">Сохранить настройки</button>
-
-            <div id="settingsResult"></div>
-        </section>
-    </main>
+<aside class="sidebar">
+<h2>DevConsole</h2>
+<p>AI IDE</p>
+<h3>Проекты</h3>
+<input type="text" id="repoUrl" placeholder="GitHub репозиторий">
+<div style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
+<button onclick="analyzeProject()">Анализ проекта</button>
+<button onclick="installDependencies()">Установить зависимости</button>
+<button onclick="loadWorkspaceTree()">Открыть workspace</button>
+<button onclick="buildApk()">Собрать APK</button>
 </div>
-
+<hr style="margin:20px 0;border-color:#2a2f3a">
+<h3>Android устройства</h3>
+<div id="devices">Нет устройств</div>
+</aside>
+<div class="workspace">
+<div class="topbar">
+<input type="text" id="workspacePath" placeholder="Путь workspace">
+<button onclick="loadWorkspaceTree()">Обновить</button>
+</div>
+<div class="workspace-body">
+<div class="file-tree" id="fileTree"></div>
+<div class="editor-panel">
+<div class="editor-header">
+<div id="editorPath">Файл не открыт</div>
+<button onclick="saveCurrentFile()">Сохранить</button>
+</div>
+<textarea id="editor"></textarea>
+<div class="logs" id="logs">DevConsole runtime initialized...</div>
+</div>
+</div>
+</div>
+</div>
+<script src="/workspace.js"></script>
 <script>
-let selectedDevice = '';
-
-async function api(url, options = {}) {
-    const response = await fetch(url, options);
-    return await response.json();
-}
-
-async function analyzeProject() {
-    const repo_url = document.getElementById('repoUrl').value;
-
-    document.getElementById('projectResult').innerText = 'Анализ проекта...';
-
-    const data = await api('/api/projects/analyze', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ repo_url })
-    });
-
-    if (data.analysis?.workspace) {
-        document.getElementById('workspacePath').value = data.analysis.workspace;
-    }
-
-    document.getElementById('projectResult').innerText = JSON.stringify(data, null, 2);
-}
-
-async function installDependencies() {
-    const repo_url = document.getElementById('repoUrl').value;
-
-    document.getElementById('projectResult').innerText = 'Установка зависимостей...';
-
-    const data = await api('/api/projects/install-dependencies', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ repo_url })
-    });
-
-    document.getElementById('projectResult').innerText = JSON.stringify(data, null, 2);
-}
-
-async function loadDevices() {
-    const data = await api('/api/android/devices', {
-        method: 'POST'
-    });
-
-    const lines = (data.stdout || '').split('\n');
-    const devices = lines.filter(line => line.includes('device') && !line.includes('List'));
-
-    const html = devices.map(device => {
-        const id = device.split(/\s+/)[0];
-
-        return `
-            <div class="status-item ${selectedDevice === id ? 'active-device' : ''}">
-                <strong>${id}</strong>
-                <button onclick="selectDevice('${id}')">Выбрать</button>
-            </div>
-        `;
-    }).join('');
-
-    document.getElementById('devices').innerHTML = html || '<p>Устройства не подключены</p>';
-}
-
-function selectDevice(id) {
-    selectedDevice = id;
-    loadDevices();
-}
-
-async function buildApk() {
-    const workspace = document.getElementById('workspacePath').value;
-
-    document.getElementById('buildResult').innerText = 'Сборка APK...';
-
-    const data = await api('/api/android/build', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ workspace })
-    });
-
-    document.getElementById('buildResult').innerText = JSON.stringify(data, null, 2);
-}
-
-async function installApk() {
-    const workspace = document.getElementById('workspacePath').value;
-
-    document.getElementById('buildResult').innerText = 'Установка APK...';
-
-    const data = await api('/api/android/install-latest', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ workspace, device: selectedDevice })
-    });
-
-    document.getElementById('buildResult').innerText = JSON.stringify(data, null, 2);
-}
-
-async function saveSettings() {
-    const api_key = document.getElementById('apiKey').value;
-    const model = document.getElementById('model').value;
-
-    const data = await api('/api/settings/openai', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ api_key, model })
-    });
-
-    document.getElementById('settingsResult').innerText = data.message || data.detail;
-}
-
-async function runPrompt() {
-    const prompt = document.getElementById('promptInput').value;
-
-    document.getElementById('promptResult').innerText = 'Выполнение AI задачи...';
-
-    const data = await api('/api/prompts/test', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ prompt, task_type: 'coding' })
-    });
-
-    document.getElementById('promptResult').innerText = data.answer || data.detail;
-}
-
-loadDevices();
+let selectedDevice='';
+async function api(url,payload={}){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});return await r.json();}
+async function analyzeProject(){const repo_url=document.getElementById('repoUrl').value;const data=await api('/api/projects/analyze',{repo_url});if(data.analysis?.workspace){document.getElementById('workspacePath').value=data.analysis.workspace;}document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
+async function installDependencies(){const repo_url=document.getElementById('repoUrl').value;const data=await api('/api/projects/install-dependencies',{repo_url});document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
+async function buildApk(){const workspace=document.getElementById('workspacePath').value;const data=await api('/api/android/build',{workspace});document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
 </script>
 </body>
 </html>
