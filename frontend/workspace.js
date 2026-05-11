@@ -1,48 +1,71 @@
 let currentBusyTask = null;
+let collectedErrors = [];
 
 function appendLog(message) {
     const logs = document.getElementById('logs');
-
-    if (!logs) {
-        return;
-    }
+    if (!logs) return;
 
     const time = new Date().toLocaleTimeString();
-
     logs.innerText += `\n[${time}] ${message}`;
-    logs.scrollTop = logs.scrollHeight;
+    requestAnimationFrame(() => { logs.scrollTop = logs.scrollHeight; });
+    collectErrorsFromText(message);
+}
+
+function collectErrorsFromText(text) {
+    if (!text) return;
+    const patterns = [
+        /error/i, /failed/i, /failure/i, /exception/i, /fatal/i,
+        /gradle task assemble.*failed/i, /could not/i, /cannot/i,
+        /what went wrong/i, /execution failed/i, /❌/
+    ];
+    const lines = String(text).split('\n').filter(line => patterns.some(pattern => pattern.test(line)));
+    lines.forEach(line => {
+        const cleaned = line.trim();
+        if (cleaned && !collectedErrors.includes(cleaned)) collectedErrors.push(cleaned);
+    });
+    renderErrors();
+}
+
+function renderErrors() {
+    const box = document.getElementById('errorsBox');
+    const count = document.getElementById('errorCount');
+    if (!box || !count) return;
+    if (collectedErrors.length === 0) {
+        box.innerText = 'Здесь появятся ошибки из Flutter, Gradle, ADB, API и stderr.';
+        count.innerText = 'Ошибок пока нет';
+        return;
+    }
+    box.innerText = collectedErrors.join('\n');
+    count.innerText = `Ошибок: ${collectedErrors.length}`;
+    requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+}
+
+function copyErrorsForAI() {
+    const text = collectedErrors.join('\n');
+    navigator.clipboard.writeText(text || 'Ошибок пока нет');
+    appendLog('Ошибки скопированы в буфер');
+}
+
+function clearErrors() {
+    collectedErrors = [];
+    renderErrors();
+    appendLog('Панель ошибок очищена');
 }
 
 function setStatus(message, state = 'idle') {
     const status = document.getElementById('runtimeStatus');
     const dot = document.getElementById('runtimeStatusDot');
-
-    if (status) {
-        status.innerText = message;
-    }
-
-    if (dot) {
-        dot.className = `status-dot ${state}`;
-    }
+    if (status) status.innerText = message;
+    if (dot) dot.className = `status-dot ${state}`;
 }
 
 function setTaskProgress(percent, message, running = true) {
     const wrap = document.getElementById('taskProgressWrap');
     const bar = document.getElementById('taskProgressBar');
     const label = document.getElementById('taskProgressLabel');
-
-    if (wrap) {
-        wrap.style.display = 'block';
-    }
-
-    if (bar) {
-        bar.style.width = `${percent}%`;
-    }
-
-    if (label) {
-        label.innerText = `${percent}% — ${message}`;
-    }
-
+    if (wrap) wrap.style.display = 'block';
+    if (bar) bar.style.width = `${percent}%`;
+    if (label) label.innerText = `${percent}% — ${message}`;
     setStatus(message, running ? 'running' : 'done');
 }
 
@@ -61,41 +84,91 @@ function setDone(message) {
 function setError(message) {
     currentBusyTask = null;
     const label = document.getElementById('taskProgressLabel');
-    if (label) {
-        label.innerText = `Ошибка — ${message}`;
-    }
+    if (label) label.innerText = `Ошибка — ${message}`;
     setStatus(message, 'error');
     appendLog(`❌ ${message}`);
 }
 
+function updateProgressFromLine(line) {
+    const text = line.toLowerCase();
+    if (text.includes('resolving dependencies')) setTaskProgress(20, 'Разбор зависимостей Flutter', true);
+    else if (text.includes('downloading packages')) setTaskProgress(35, 'Загрузка пакетов', true);
+    else if (text.includes('got dependencies')) setTaskProgress(65, 'Зависимости готовы', true);
+    else if (text.includes('running gradle task')) setTaskProgress(50, 'Gradle собирает приложение', true);
+    else if (text.includes('built ') || text.includes('app-release.apk')) setTaskProgress(95, 'APK собран', true);
+    else if (text.includes('installing') || text.includes('performing streamed install')) setTaskProgress(70, 'Установка на устройство', true);
+    else if (text.includes('syncing files')) setTaskProgress(80, 'Синхронизация файлов на телефоне', true);
+    else if (text.includes('flutter run key commands')) setTaskProgress(90, 'Приложение запущено, Flutter подключён', true);
+}
+
 async function workspaceApi(url, payload = {}, method = 'POST') {
     appendLog(`API запрос: ${url}`);
-
     const response = await fetch(url, {
         method,
-        headers: {
-            'Content-Type': 'application/json'
-        },
+        headers: {'Content-Type': 'application/json'},
         body: method === 'GET' ? undefined : JSON.stringify(payload)
     });
-
     const data = await response.json().catch(() => ({success: false, detail: 'Пустой ответ сервера'}));
+    if (!response.ok) appendLog(`Ошибка API ${response.status}: ${data.detail || 'unknown error'}`);
+    return data;
+}
 
-    if (!response.ok) {
-        appendLog(`Ошибка API ${response.status}: ${data.detail || 'unknown error'}`);
+async function streamRuntimeCommand(command, title, progress = 50) {
+    const workspace = getWorkspacePath();
+    if (!workspace) {
+        setError('Workspace не выбран');
+        return false;
     }
 
-    return data;
+    setTaskProgress(progress, title || command, true);
+    appendLog(`▶ ${title || command} live`);
+
+    const response = await fetch('/api/runtime/command-stream', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({workspace, command, device: getSelectedDevice()})
+    });
+
+    if (!response.ok || !response.body) {
+        setError(`Не удалось открыть live stream: ${title || command}`);
+        return false;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let ok = true;
+
+    while (true) {
+        const {value, done} = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, {stream: true});
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const raw of lines) {
+            if (!raw.trim()) continue;
+            let event;
+            try { event = JSON.parse(raw); } catch (_) { appendLog(raw); continue; }
+            if (event.type === 'line') {
+                appendLog(event.message);
+                updateProgressFromLine(event.message);
+            } else if (event.type === 'error') {
+                ok = false;
+                setError(event.message);
+            } else if (event.type === 'done') {
+                ok = Number(event.returncode) === 0;
+                appendLog(ok ? `✅ Выполнено: ${title || command}` : `❌ Ошибка: ${title || command} exit ${event.returncode}`);
+            }
+        }
+    }
+
+    if (!ok) setError(`Ошибка: ${title || command}`);
+    return ok;
 }
 
 function getSelectedDevice() {
     const select = document.getElementById('deviceSelect');
-
-    if (!select) {
-        return null;
-    }
-
-    return select.value || null;
+    return select ? (select.value || null) : null;
 }
 
 function getWorkspacePath() {
@@ -105,60 +178,27 @@ function getWorkspacePath() {
 
 async function loadSystemStatus() {
     setStatus('Проверяю состояние DevConsole', 'running');
-    const data = await workspaceApi('/api/system/status', {}, 'GET');
-    const status = document.getElementById('githubStatus');
-    const username = document.getElementById('githubUsername');
-
-    if (status && username) {
-        if (data.github?.username) {
-            username.value = data.github.username;
-        }
-
-        status.innerText = data.github?.token_set
-            ? `GitHub: ${data.github.username || 'user'} / доступ сохранён`
-            : 'GitHub доступ не сохранён';
-    }
-
+    await workspaceApi('/api/system/status', {}, 'GET');
     setStatus('DevConsole готов', 'done');
 }
 
 async function saveGitHubSettings() {
-    const username = document.getElementById('githubUsername').value.trim();
-    const token = document.getElementById('githubToken').value.trim();
-
-    if (!username) {
-        setError('Укажите GitHub username');
-        return;
-    }
-
-    if (!token) {
-        setError('Укажите GitHub credential');
-        return;
-    }
-
+    const username = document.getElementById('githubUsername')?.value.trim() || '';
+    const token = document.getElementById('githubToken')?.value.trim() || '';
+    if (!username) { setError('Укажите GitHub login'); return; }
+    if (!token) { setError('Укажите GitHub key'); return; }
     setBusy('Сохраняю GitHub доступ');
-
-    const data = await workspaceApi('/api/settings/github', {
-        username,
-        token
-    });
-
+    const data = await workspaceApi('/api/settings/github', {username, token});
     if (data.success) {
-        document.getElementById('githubToken').value = '';
-        await loadSystemStatus();
+        const tokenInput = document.getElementById('githubToken');
+        if (tokenInput) tokenInput.value = '';
         setDone('GitHub доступ сохранён');
-    } else {
-        setError('Не удалось сохранить GitHub доступ');
-    }
+    } else setError('Не удалось сохранить GitHub доступ');
 }
 
 function renderGroupedRuntimeButtons() {
     const container = document.getElementById('runtimeButtons');
-
-    if (!container) {
-        return;
-    }
-
+    if (!container) return;
     container.innerHTML = `
         <button onclick="runRuntimeScenario('check')">Проверить</button>
         <button onclick="runRuntimeScenario('run_profile')">Запустить</button>
@@ -174,50 +214,12 @@ async function loadRuntimeCommands() {
 }
 
 async function executeRuntimeCommand(command, title, progress = 50) {
-    const workspace = getWorkspacePath();
-
-    if (!workspace) {
-        setError('Workspace не выбран');
-        return false;
-    }
-
-    const taskTitle = title || command;
-    setTaskProgress(progress, taskTitle, true);
-    appendLog(`▶ ${taskTitle}`);
-
-    const data = await workspaceApi('/api/runtime/command', {
-        workspace,
-        command,
-        device: getSelectedDevice()
-    });
-
-    if (data.result?.stdout) {
-        appendLog(data.result.stdout);
-    }
-
-    if (data.result?.stderr) {
-        appendLog(data.result.stderr);
-    }
-
-    appendLog(data.success
-        ? `✅ Выполнено: ${data.label || command}`
-        : `❌ Ошибка: ${data.label || command}`
-    );
-
-    if (!data.success) {
-        setError(`Ошибка: ${data.label || command}`);
-    }
-
-    return Boolean(data.success);
+    return await streamRuntimeCommand(command, title, progress);
 }
 
 async function runRuntimeScenario(scenario) {
     const workspace = getWorkspacePath();
-
-    if (!workspace) {
-        setError('Workspace не выбран');
-        return;
-    }
+    if (!workspace) { setError('Workspace не выбран'); return; }
 
     if (scenario === 'check') {
         setBusy('Проверка проекта');
@@ -229,10 +231,7 @@ async function runRuntimeScenario(scenario) {
     }
 
     if (scenario === 'run_profile') {
-        if (!getSelectedDevice()) {
-            setError('Устройство не выбрано');
-            return;
-        }
+        if (!getSelectedDevice()) { setError('Устройство не выбрано'); return; }
         setBusy('Запуск на телефоне');
         appendLog('=== Запуск на телефоне в profile режиме ===');
         if (!await executeRuntimeCommand('flutter_pub_get', 'Подготовка зависимостей', 30)) return;
@@ -267,87 +266,38 @@ async function runRuntimeScenario(scenario) {
     }
 }
 
-async function runRuntimeCommand(command) {
-    await executeRuntimeCommand(command, command);
-}
-
 async function installLatestApk() {
     const workspace = getWorkspacePath();
-
     setTaskProgress(40, 'Отправляю APK на устройство', true);
-
-    const data = await workspaceApi('/api/runtime/install-latest-apk', {
-        workspace,
-        device: getSelectedDevice()
-    });
-
-    if (data.result?.stdout) {
-        appendLog(data.result.stdout);
-    }
-
-    if (data.result?.stderr) {
-        appendLog(data.result.stderr);
-    }
-
-    if (data.success) {
-        setDone('APK установлен');
-    } else {
-        setError('Ошибка установки APK');
-    }
+    const data = await workspaceApi('/api/runtime/install-latest-apk', {workspace, device: getSelectedDevice()});
+    if (data.result?.stdout) appendLog(data.result.stdout);
+    if (data.result?.stderr) appendLog(data.result.stderr);
+    if (data.success) setDone('APK установлен'); else setError('Ошибка установки APK');
 }
 
 async function restartCurrentApp() {
     const workspace = getWorkspacePath();
     const packageName = document.getElementById('packageName').value;
-
-    if (!packageName) {
-        setError('Укажите package name');
-        return;
-    }
-
+    if (!packageName) { setError('Укажите package name'); return; }
     setBusy('Перезапускаю приложение');
-
-    const data = await workspaceApi('/api/runtime/restart-app', {
-        workspace,
-        device: getSelectedDevice(),
-        package_name: packageName
-    });
-
-    if (data.result?.stdout) {
-        appendLog(data.result.stdout);
-    }
-
-    if (data.result?.stderr) {
-        appendLog(data.result.stderr);
-    }
-
-    if (data.success) {
-        setDone('Приложение перезапущено');
-    } else {
-        setError('Ошибка перезапуска приложения');
-    }
+    const data = await workspaceApi('/api/runtime/restart-app', {workspace, device: getSelectedDevice(), package_name: packageName});
+    if (data.result?.stdout) appendLog(data.result.stdout);
+    if (data.result?.stderr) appendLog(data.result.stderr);
+    if (data.success) setDone('Приложение перезапущено'); else setError('Ошибка перезапуска приложения');
 }
 
 async function loadProjects() {
     const container = document.getElementById('projectsList');
-
-    if (!container) {
-        return;
-    }
-
+    if (!container) return;
     setStatus('Загружаю список проектов', 'running');
     appendLog('Загрузка списка проектов');
-
     const data = await workspaceApi('/api/projects/list', {}, 'GET');
-
     const projects = data.projects || [];
-
     if (projects.length === 0) {
         container.innerHTML = 'Проекты отсутствуют';
         setStatus('Проекты отсутствуют', 'idle');
         return;
     }
-
     container.innerHTML = projects.map(project => `
         <div class="project-card" onclick="openProject('${project.workspace}', '${project.name || 'project'}')">
             <strong>${project.name}</strong><br>
@@ -355,13 +305,11 @@ async function loadProjects() {
             <small>${project.workspace}</small>
         </div>
     `).join('');
-
     setStatus(`Проекты загружены: ${projects.length}`, 'done');
 }
 
 function openProject(workspace, name = 'project') {
     document.getElementById('workspacePath').value = workspace;
-
     appendLog(`Открытие проекта: ${workspace}`);
     setTaskProgress(100, `Проект выбран: ${name}`, false);
     setStatus(`Проект готов: ${name}`, 'done');
@@ -370,82 +318,40 @@ function openProject(workspace, name = 'project') {
 
 async function registerCurrentProject(repoUrl, workspace, stack = 'unknown') {
     const name = repoUrl.split('/').pop().replace('.git', '');
-
     setTaskProgress(90, `Регистрирую проект: ${name}`, true);
-
-    await workspaceApi('/api/projects/register', {
-        name,
-        repo_url: repoUrl,
-        workspace,
-        stack
-    });
-
+    await workspaceApi('/api/projects/register', {name, repo_url: repoUrl, workspace, stack});
     appendLog(`Проект зарегистрирован: ${name}`);
-
     loadProjects();
 }
 
-async function loadWorkspaceTree() {
-    const workspace = getWorkspacePath();
-
-    if (!workspace) {
-        setError('Workspace path пустой');
-        return;
-    }
-
-    setDone(`Workspace выбран: ${workspace}`);
-}
-
 function parseLegacyDevices(stdout) {
-    return (stdout || '')
-        .split('\n')
-        .filter(line => line.includes('device') && !line.includes('List'))
-        .map(line => {
-            const serial = line.split(/\s+/)[0];
-            return {
-                serial,
-                title: serial,
-                subtitle: 'ADB device',
-                state: 'device'
-            };
-        });
+    return (stdout || '').split('\n').filter(line => line.includes('device') && !line.includes('List')).map(line => {
+        const serial = line.split(/\s+/)[0];
+        return {serial, title: serial, subtitle: 'ADB device', state: 'device'};
+    });
 }
 
 async function loadDevices() {
     setStatus('Ищу Android устройства', 'running');
     appendLog('Обновление списка Android устройств');
-
     const data = await workspaceApi('/api/android/devices');
-
     const container = document.getElementById('devices');
     const select = document.getElementById('deviceSelect');
-
-    if (!container || !select) {
-        return;
-    }
-
-    const devices = Array.isArray(data.devices) && data.devices.length > 0
-        ? data.devices
-        : parseLegacyDevices(data.stdout || '');
-
+    if (!container || !select) return;
+    const devices = Array.isArray(data.devices) && data.devices.length > 0 ? data.devices : parseLegacyDevices(data.stdout || '');
     if (devices.length === 0) {
         container.innerHTML = 'Устройства не подключены';
         select.innerHTML = '<option value="">Нет устройств</option>';
         setStatus('Android устройства не подключены', 'idle');
         return;
     }
-
     container.innerHTML = devices.map(device => `
         <div style="margin-bottom:8px;padding:10px;background:#1d2430;border-radius:8px;">
             <strong>📱 ${device.title || device.serial}</strong><br>
             <small>${device.subtitle || device.serial}</small>
         </div>
     `).join('');
-
-    select.innerHTML = devices.map(device => `
-        <option value="${device.serial}">${device.title || device.serial}</option>
-    `).join('');
-
+    select.innerHTML = devices.map(device => `<option value="${device.serial}">${device.title || device.serial}</option>`).join('');
     setStatus(`Android устройства найдены: ${devices.length}`, 'done');
     appendLog(`✅ Android устройства обновлены: ${devices.map(device => device.title || device.serial).join(', ')}`);
 }
