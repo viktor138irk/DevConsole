@@ -396,6 +396,21 @@ async function loadWorkspaceTree() {
     setDone(`Workspace выбран: ${workspace}`);
 }
 
+function parseLegacyDevices(stdout) {
+    return (stdout || '')
+        .split('\n')
+        .filter(line => line.includes('device') && !line.includes('List'))
+        .map(line => {
+            const serial = line.split(/\s+/)[0];
+            return {
+                serial,
+                title: serial,
+                subtitle: 'ADB device',
+                state: 'device'
+            };
+        });
+}
+
 async function loadDevices() {
     setStatus('Ищу Android устройства', 'running');
     appendLog('Обновление списка Android устройств');
@@ -409,11 +424,9 @@ async function loadDevices() {
         return;
     }
 
-    const lines = (data.stdout || '').split('\n');
-
-    const devices = lines.filter(line =>
-        line.includes('device') && !line.includes('List')
-    );
+    const devices = Array.isArray(data.devices) && data.devices.length > 0
+        ? data.devices
+        : parseLegacyDevices(data.stdout || '');
 
     if (devices.length === 0) {
         container.innerHTML = 'Устройства не подключены';
@@ -422,23 +435,19 @@ async function loadDevices() {
         return;
     }
 
-    container.innerHTML = devices.map(device => {
-        const id = device.split(/\s+/)[0];
+    container.innerHTML = devices.map(device => `
+        <div style="margin-bottom:8px;padding:10px;background:#1d2430;border-radius:8px;">
+            <strong>📱 ${device.title || device.serial}</strong><br>
+            <small>${device.subtitle || device.serial}</small>
+        </div>
+    `).join('');
 
-        return `
-            <div style="margin-bottom:8px;padding:8px;background:#1d2430;border-radius:8px;">
-                📱 ${id}
-            </div>
-        `;
-    }).join('');
-
-    select.innerHTML = devices.map(device => {
-        const id = device.split(/\s+/)[0];
-
-        return `<option value="${id}">${id}</option>`;
-    }).join('');
+    select.innerHTML = devices.map(device => `
+        <option value="${device.serial}">${device.title || device.serial}</option>
+    `).join('');
 
     setStatus(`Android устройства найдены: ${devices.length}`, 'done');
+    appendLog(`✅ Android устройства обновлены: ${devices.map(device => device.title || device.serial).join(', ')}`);
 }
 
 window.addEventListener('load', () => {
