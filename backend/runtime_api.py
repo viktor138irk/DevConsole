@@ -9,6 +9,8 @@ from backend.shell_runner import run_command
 
 router = APIRouter(prefix='/api/runtime', tags=['runtime'])
 
+FLUTTER_ENV = 'export HOME=/root PUB_CACHE=/root/.pub-cache PATH=/root/flutter/bin:/root/Android/cmdline-tools/latest/bin:/root/Android/platform-tools:$PATH && '
+
 
 class RuntimeCommandRequest(BaseModel):
     workspace: str
@@ -25,22 +27,22 @@ RUNTIME_COMMANDS: dict[str, dict] = {
     },
     'flutter_clean': {
         'label': 'Flutter Clean',
-        'command': 'flutter clean',
+        'command': f'{FLUTTER_ENV}flutter clean',
         'timeout': 900,
     },
     'flutter_pub_get': {
         'label': 'Flutter Pub Get',
-        'command': 'flutter pub get',
+        'command': f'{FLUTTER_ENV}flutter pub get',
         'timeout': 900,
     },
     'flutter_build_apk': {
         'label': 'Flutter Build APK',
-        'command': 'flutter build apk --release',
+        'command': f'{FLUTTER_ENV}flutter build apk --release',
         'timeout': 3600,
     },
     'flutter_run_profile': {
         'label': 'Flutter Run Profile',
-        'command': 'flutter run --profile',
+        'command': f'{FLUTTER_ENV}flutter run --profile',
         'timeout': 1800,
         'device': True,
     },
@@ -48,13 +50,11 @@ RUNTIME_COMMANDS: dict[str, dict] = {
         'label': 'ADB Reconnect',
         'command': 'adb reconnect',
         'timeout': 120,
-        'root_cwd': True,
     },
     'adb_logcat': {
         'label': 'ADB Logcat Snapshot',
         'command': 'adb logcat -d -t 300',
         'timeout': 120,
-        'root_cwd': True,
         'device': True,
     },
 }
@@ -67,14 +67,14 @@ def _workspace_cwd(workspace: str) -> str:
     return path.as_posix()
 
 
-def _with_device(command: str, device: str | None) -> str:
-    if not device:
+def _with_device(command: str, device: str | None, enabled: bool) -> str:
+    if not enabled or not device:
         return command
 
-    if command.startswith('adb '):
+    if 'adb ' in command:
         return command.replace('adb ', f'adb -s {device} ', 1)
 
-    if command.startswith('flutter ') and ' -d ' not in command:
+    if 'flutter ' in command and ' -d ' not in command:
         return f'{command} -d {device}'
 
     return command
@@ -106,13 +106,8 @@ async def runtime_commands():
 @router.post('/event')
 async def runtime_event(payload: dict):
     message = payload.get('message', 'unknown runtime event')
-
     add_log(message)
-
-    return {
-        'success': True,
-        'message': message,
-    }
+    return {'success': True, 'message': message}
 
 
 @router.post('/command')
@@ -123,15 +118,15 @@ async def runtime_command(payload: RuntimeCommandRequest):
         raise HTTPException(status_code=400, detail='Runtime command is not allowed')
 
     cwd = _workspace_cwd(payload.workspace)
-    command = _with_device(config['command'], payload.device)
+    command = _with_device(
+        config['command'],
+        payload.device,
+        bool(config.get('device')),
+    )
 
     add_log(f"Runtime command started: {config['label']}")
 
-    result = run_command(
-        command,
-        cwd,
-        timeout=int(config.get('timeout', 900)),
-    )
+    result = run_command(command, cwd, timeout=int(config.get('timeout', 900)))
 
     add_log(
         f"Runtime command finished: {config['label']} "
