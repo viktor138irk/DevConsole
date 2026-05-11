@@ -15,11 +15,12 @@ from backend.config_store import (
 from backend.openai_client import OpenAIConfigurationError, ask_ai
 from backend.project_analyzer import analyze_github_project
 from backend.shell_runner import run_command
+from backend.workspace_api import router as workspace_router
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT_DIR / 'frontend'
 
-app = FastAPI(title='DevConsole', version='0.1.0')
+app = FastAPI(title='DevConsole', version='0.2.0')
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,6 +29,8 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+app.include_router(workspace_router)
 
 if FRONTEND_DIR.exists():
     app.mount('/assets', StaticFiles(directory=FRONTEND_DIR / 'assets'), name='assets')
@@ -49,26 +52,24 @@ class ProjectAnalyzeRequest(BaseModel):
 
 class WorkspaceRequest(BaseModel):
     workspace: str
+    device: str | None = None
 
 
 @app.get('/')
 async def root():
-    index_file = FRONTEND_DIR / 'index.html'
-    if index_file.exists():
-        return FileResponse(index_file)
+    return FileResponse(FRONTEND_DIR / 'index.html')
 
-    return {
-        'project': 'DevConsole',
-        'version': '0.1.0',
-        'status': 'running',
-        'openai_configured': has_openai_key(),
-    }
+
+@app.get('/workspace.js')
+async def workspace_js():
+    return FileResponse(FRONTEND_DIR / 'workspace.js')
 
 
 @app.get('/health')
 async def health():
     return {
         'status': 'ok',
+        'version': '0.2.0',
         'openai_configured': has_openai_key(),
     }
 
@@ -77,18 +78,10 @@ async def health():
 async def system_status():
     return {
         'project': 'DevConsole',
-        'version': '0.1.0',
+        'version': '0.2.0',
         'status': 'running',
         'openai_configured': has_openai_key(),
         'openai_model': get_openai_model(),
-    }
-
-
-@app.get('/api/settings/openai')
-async def openai_status():
-    return {
-        'configured': has_openai_key(),
-        'model': get_openai_model(),
     }
 
 
@@ -128,20 +121,6 @@ async def test_prompt(payload: PromptTestRequest):
     }
 
 
-@app.post('/api/settings/openai/test')
-async def test_openai_connection():
-    try:
-        result = await ask_ai('Reply with exactly: DevConsole AI connection OK', 'test')
-    except OpenAIConfigurationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return {
-        'success': True,
-        'model': result['model'],
-        'answer': result['answer'],
-    }
-
-
 @app.post('/api/projects/analyze')
 async def analyze_project(payload: ProjectAnalyzeRequest):
     repo_url = payload.repo_url.strip()
@@ -149,10 +128,7 @@ async def analyze_project(payload: ProjectAnalyzeRequest):
     if not repo_url.startswith('http'):
         raise HTTPException(status_code=400, detail='Invalid repository URL')
 
-    try:
-        analysis = analyze_github_project(repo_url)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    analysis = analyze_github_project(repo_url)
 
     return {
         'success': True,
@@ -162,13 +138,12 @@ async def analyze_project(payload: ProjectAnalyzeRequest):
 
 @app.post('/api/projects/install-dependencies')
 async def install_dependencies(payload: ProjectAnalyzeRequest):
-    try:
-        analysis = analyze_github_project(payload.repo_url.strip())
-        outputs = []
-        for step in analysis.dependency_steps:
-            outputs.append(run_command(step.command, step.cwd, 1800))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    analysis = analyze_github_project(payload.repo_url.strip())
+
+    outputs = []
+
+    for step in analysis.dependency_steps:
+        outputs.append(run_command(step.command, step.cwd, 1800))
 
     return {
         'success': True,
@@ -179,21 +154,13 @@ async def install_dependencies(payload: ProjectAnalyzeRequest):
 
 @app.post('/api/android/devices')
 async def android_devices():
-    try:
-        result = list_devices()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return result
+    return list_devices()
 
 
 @app.post('/api/android/build')
 async def android_build(payload: WorkspaceRequest):
-    try:
-        result = build_android(payload.workspace)
-        apks = find_apks(payload.workspace)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = build_android(payload.workspace)
+    apks = find_apks(payload.workspace)
 
     return {
         'success': result['returncode'] == 0,
@@ -204,12 +171,10 @@ async def android_build(payload: WorkspaceRequest):
 
 @app.post('/api/android/install-latest')
 async def android_install_latest(payload: WorkspaceRequest):
-    try:
-        result = install_latest_apk(payload.workspace)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = install_latest_apk(payload.workspace)
 
     return {
         'success': result['returncode'] == 0,
         'result': result,
+        'device': payload.device,
     }
