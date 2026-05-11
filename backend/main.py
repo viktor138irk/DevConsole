@@ -12,6 +12,7 @@ from backend.config_store import (
     set_setting,
 )
 from backend.openai_client import OpenAIConfigurationError, ask_ai
+from backend.project_analyzer import analyze_github_project
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT_DIR / 'frontend'
@@ -38,6 +39,10 @@ class OpenAIConfigRequest(BaseModel):
 class PromptTestRequest(BaseModel):
     prompt: str
     task_type: str | None = None
+
+
+class ProjectAnalyzeRequest(BaseModel):
+    repo_url: str
 
 
 @app.get('/')
@@ -128,4 +133,22 @@ async def test_openai_connection():
         'success': True,
         'model': result['model'],
         'answer': result['answer'],
+    }
+
+
+@app.post('/api/projects/analyze')
+async def analyze_project(payload: ProjectAnalyzeRequest):
+    repo_url = payload.repo_url.strip()
+
+    if not repo_url.startswith('http'):
+        raise HTTPException(status_code=400, detail='Invalid repository URL')
+
+    try:
+        analysis = analyze_github_project(repo_url)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        'success': True,
+        'analysis': analysis.to_dict(),
     }
