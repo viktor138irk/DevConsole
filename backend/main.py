@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from backend.android_tools import build_android, find_apks, install_latest_apk, list_devices
 from backend.config_store import (
+    get_github_public_config,
     get_openai_model,
     has_openai_key,
     set_setting,
@@ -23,7 +24,7 @@ from backend.workspace_api import router as workspace_router
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT_DIR / 'frontend'
 
-app = FastAPI(title='DevConsole', version='0.3.0')
+app = FastAPI(title='DevConsole', version='0.3.1')
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,6 +45,11 @@ if FRONTEND_DIR.exists():
 class OpenAIConfigRequest(BaseModel):
     api_key: str
     model: str = 'gpt-5'
+
+
+class GitHubConfigRequest(BaseModel):
+    username: str
+    token: str
 
 
 class PromptTestRequest(BaseModel):
@@ -74,7 +80,7 @@ async def workspace_js():
 async def health():
     return {
         'status': 'ok',
-        'version': '0.3.0',
+        'version': '0.3.1',
         'openai_configured': has_openai_key(),
     }
 
@@ -83,10 +89,11 @@ async def health():
 async def system_status():
     return {
         'project': 'DevConsole',
-        'version': '0.3.0',
+        'version': '0.3.1',
         'status': 'running',
         'openai_configured': has_openai_key(),
         'openai_model': get_openai_model(),
+        'github': get_github_public_config(),
     }
 
 
@@ -106,6 +113,24 @@ async def save_openai_settings(payload: OpenAIConfigRequest):
     return {
         'success': True,
         'message': 'OpenAI settings saved',
+    }
+
+
+@app.post('/api/settings/github')
+async def save_github_settings(payload: GitHubConfigRequest):
+    username = payload.username.strip()
+    token = payload.token.strip()
+
+    set_setting('GITHUB_USERNAME', username)
+
+    if token:
+        set_setting('GITHUB_TOKEN', token)
+
+    add_log('GitHub credentials updated')
+
+    return {
+        'success': True,
+        'github': get_github_public_config(),
     }
 
 
@@ -144,7 +169,7 @@ async def analyze_project(payload: ProjectAnalyzeRequest):
 
     analysis = analyze_github_project(repo_url)
 
-    add_log(f'Project analyzed: {analysis.stack}')
+    add_log(f'Project analyzed: {analysis.detected_stack}')
 
     return {
         'success': True,
