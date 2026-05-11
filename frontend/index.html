@@ -8,15 +8,16 @@
 body{margin:0;background:#0f1115;color:#fff;font-family:Arial,sans-serif}
 .layout{display:flex;height:100vh}
 .sidebar{width:320px;background:#171a21;padding:20px;border-right:1px solid #2a2f3a;overflow:auto;display:flex;flex-direction:column;gap:16px}
-.workspace{flex:1;display:flex;flex-direction:column}.topbar{padding:10px;background:#171a21;border-bottom:1px solid #2a2f3a;display:flex;gap:10px}
+.workspace{flex:1;display:flex;flex-direction:column}.topbar{padding:10px;background:#171a21;border-bottom:1px solid #2a2f3a;display:flex;gap:10px;flex-wrap:wrap}
 .workspace-body{flex:1;display:flex;overflow:hidden}.file-tree{width:320px;background:#13161c;border-right:1px solid #2a2f3a;overflow:auto;padding:10px}.editor-panel{flex:1;display:flex;flex-direction:column}
 .editor-header{padding:10px;background:#171a21;border-bottom:1px solid #2a2f3a;display:flex;justify-content:space-between;align-items:center}
 textarea{flex:1;background:#0f1115;color:#fff;border:none;padding:16px;font-family:monospace;font-size:14px;outline:none;resize:none}
 button{background:#2563eb;color:#fff;border:none;padding:10px 14px;border-radius:8px;cursor:pointer}
 button:hover{background:#3b82f6}
-input{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px;border-radius:8px;flex:1}.tree-node{padding:6px;border-radius:6px;cursor:pointer}.tree-node:hover{background:#1d2430}
-.logs{height:180px;background:#0b0d11;border-top:1px solid #2a2f3a;padding:10px;overflow:auto;font-family:monospace;font-size:12px}
+input,select{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px;border-radius:8px;flex:1}.tree-node{padding:6px;border-radius:6px;cursor:pointer}.tree-node:hover{background:#1d2430}
+.logs{height:220px;background:#0b0d11;border-top:1px solid #2a2f3a;padding:10px;overflow:auto;font-family:monospace;font-size:12px;white-space:pre-wrap}
 .section{background:#13161c;border:1px solid #2a2f3a;border-radius:12px;padding:14px}.section h3{margin-top:0}.projects-list{max-height:260px;overflow:auto}
+.runtime-grid{display:flex;gap:10px;flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -24,7 +25,7 @@ input{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px;border
 <aside class="sidebar">
 <div>
 <h2>DevConsole</h2>
-<p>AI Development IDE</p>
+<p>AI Development Runtime</p>
 </div>
 <div class="section">
 <h3>Импорт проекта</h3>
@@ -42,13 +43,20 @@ input{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px;border
 </div>
 <div class="section">
 <h3>Android устройства</h3>
+<select id="deviceSelect">
+<option value="">Поиск устройств...</option>
+</select>
+<div style="height:10px"></div>
 <div id="devices">Поиск устройств...</div>
 </div>
 </aside>
 <div class="workspace">
 <div class="topbar">
 <input type="text" id="workspacePath" placeholder="Путь workspace">
+<input type="text" id="packageName" placeholder="Package name (com.example.app)">
 <button onclick="loadWorkspaceTree()">Обновить workspace</button>
+<button onclick="installLatestApk()">Install APK</button>
+<button onclick="restartCurrentApp()">Restart App</button>
 </div>
 <div class="workspace-body">
 <div class="file-tree" id="fileTree"></div>
@@ -60,6 +68,10 @@ input{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px;border
 <button onclick="saveCurrentFile()">Сохранить файл</button>
 </div>
 </div>
+<div style="padding:10px;background:#13161c;border-bottom:1px solid #2a2f3a;display:flex;flex-direction:column;gap:10px">
+<div><strong>Runtime Commands</strong></div>
+<div class="runtime-grid" id="runtimeButtons"></div>
+</div>
 <textarea id="editor"></textarea>
 <div class="logs" id="logs">DevConsole runtime initialized...</div>
 </div>
@@ -68,7 +80,7 @@ input{background:#0f1115;border:1px solid #2a2f3a;color:#fff;padding:10px;border
 </div>
 <script src="/workspace.js"></script>
 <script>
-async function api(url,payload={}){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});return await r.json();}
+async function api(url,payload={},method='POST'){const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:method==='GET'?undefined:JSON.stringify(payload)});return await r.json();}
 async function analyzeProject(){const repo_url=document.getElementById('repoUrl').value;const data=await api('/api/projects/analyze',{repo_url});if(data.analysis?.workspace){document.getElementById('workspacePath').value=data.analysis.workspace;await registerCurrentProject(repo_url,data.analysis.workspace,data.analysis.stack||'unknown');}document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
 async function installDependencies(){const repo_url=document.getElementById('repoUrl').value;const data=await api('/api/projects/install-dependencies',{repo_url});document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
 async function buildApk(){const workspace=document.getElementById('workspacePath').value;const data=await api('/api/android/build',{workspace});document.getElementById('logs').innerText=JSON.stringify(data,null,2);}
